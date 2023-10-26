@@ -9,6 +9,54 @@ def all_sum_item(item):
     dist.all_reduce(item)
     return item.item()
 
+def cluster_acc(y_true, y_pred, return_ind=False):
+    """
+    Calculate clustering accuracy. Require scikit-learn installed
+
+    # Arguments
+        y: true labels, numpy.array with shape `(n_samples,)`
+        y_pred: predicted labels, numpy.array with shape `(n_samples,)`
+
+    # Return
+        accuracy, in [0,1]
+    """
+    y_true = y_true.astype(int)
+    assert y_pred.size == y_true.size
+    D = max(y_pred.max(), y_true.max()) + 1
+    w = np.zeros((D, D), dtype=int)
+    for i in range(y_pred.size):
+        w[y_pred[i], y_true[i]] += 1
+
+    ind = linear_assignment(w.max() - w)
+    ind = np.vstack(ind).T
+
+    if return_ind:
+        return sum([w[i, j] for i, j in ind]) * 1.0 / y_pred.size, ind, w
+    else:
+        return sum([w[i, j] for i, j in ind]) * 1.0 / y_pred.size
+
+def split_cluster_acc_v1(y_true, y_pred, mask):
+
+    """
+    Evaluate clustering metrics on two subsets of data, as defined by the mask 'mask'
+    (Mask usually corresponding to `Old' and `New' classes in GCD setting)
+    :param targets: All ground truth labels
+    :param preds: All predictions
+    :param mask: Mask defining two subsets
+    :return:
+    """
+
+    mask = mask.astype(bool)
+    y_true = y_true.astype(int)
+    y_pred = y_pred.astype(int)
+    weight = mask.mean()
+
+    old_acc = cluster_acc(y_true[mask], y_pred[mask])
+    new_acc = cluster_acc(y_true[~mask], y_pred[~mask])
+    total_acc = weight * old_acc + (1 - weight) * new_acc
+
+    return total_acc, old_acc, new_acc
+
 def split_cluster_acc_v2(y_true, y_pred, mask):
     """
     Calculate clustering accuracy. Require scikit-learn installed
@@ -137,6 +185,7 @@ def split_cluster_acc_v2_balanced(y_true, y_pred, mask):
 
 
 EVAL_FUNCS = {
+    'v1': split_cluster_acc_v1,
     'v2': split_cluster_acc_v2,
     'v2b': split_cluster_acc_v2_balanced
 }
@@ -172,13 +221,17 @@ def log_accs_from_preds(y_true, y_pred, mask, eval_funcs, save_name, T=None,
 
         if print_output:
             print_str = f'Epoch {T}, {log_name}: All {all_acc:.4f} | Old {old_acc:.4f} | New {new_acc:.4f}'
-            try:
-                if dist.get_rank() == 0:
-                    try:
-                        args.logger.info(print_str)
-                    except:
-                        print(print_str)
-            except:
-                pass
+            print(print_str)
+            args.logger.info(print_str)
+        # if print_output:
+        #     print_str = f'Epoch {T}, {log_name}: All {all_acc:.4f} | Old {old_acc:.4f} | New {new_acc:.4f}'
+        #     try:
+        #         if dist.get_rank() == 0:
+        #             try:
+        #                 args.logger.info(print_str)
+        #             except:
+        #                 print(print_str)
+        #     except:
+        #         pass
 
     return to_return
