@@ -13,8 +13,10 @@ from data.get_datasets import get_datasets, get_class_splits
 
 from util.general_utils import AverageMeter, init_experiment
 from util.cluster_and_log_utils import log_accs_from_preds
-from config import exp_root
+from config import exp_root, dino_pretrain_path
 from model import DINOHead, info_nce_logits, SupConLoss, DistillLoss, ContrastiveLearningViewGenerator, get_params_groups
+
+from vit_model import vision_transformer as vits
 
 
 def train(student, train_loader, test_loader, unlabelled_train_loader, args):
@@ -109,14 +111,15 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
 
         args.logger.info('Train Epoch: {} Avg Loss: {:.4f} '.format(epoch, loss_record.avg))
 
-        args.logger.info('Testing on unlabelled examples in the training data...')
-        all_acc, old_acc, new_acc = test(student, unlabelled_train_loader, epoch=epoch, save_name='Train ACC Unlabelled', args=args)
-        # args.logger.info('Testing on disjoint test set...')
-        # all_acc_test, old_acc_test, new_acc_test = test(student, test_loader, epoch=epoch, save_name='Test ACC', args=args)
+        if (epoch + 1) % args.eval_freq == 0:
+            args.logger.info('Testing on unlabelled examples in the training data...')
+            all_acc, old_acc, new_acc = test(student, unlabelled_train_loader, epoch=epoch, save_name='Train ACC Unlabelled', args=args)
+            args.logger.info('Testing on disjoint test set...')
+            all_acc_test, old_acc_test, new_acc_test = test(student, test_loader, epoch=epoch, save_name='Test ACC', args=args)
 
 
-        args.logger.info('Train Accuracies: All {:.4f} | Old {:.4f} | New {:.4f}'.format(all_acc, old_acc, new_acc))
-        # args.logger.info('Test Accuracies: All {:.4f} | Old {:.4f} | New {:.4f}'.format(all_acc_test, old_acc_test, new_acc_test))
+            args.logger.info('Train Accuracies: All {:.4f} | Old {:.4f} | New {:.4f}'.format(all_acc, old_acc, new_acc))
+            args.logger.info('Test Accuracies: All {:.4f} | Old {:.4f} | New {:.4f}'.format(all_acc_test, old_acc_test, new_acc_test))
 
         # Step schedule
         exp_lr_scheduler.step()
@@ -177,7 +180,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='cluster', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--batch_size', default=128, type=int)
     parser.add_argument('--num_workers', default=8, type=int)
-    parser.add_argument('--eval_funcs', nargs='+', help='Which eval functions to use', default=['v2', 'v2p'])
+    parser.add_argument('--eval_funcs', nargs='+', help='Which eval functions to use', default=['v1', 'v2', 'v2b'])
 
     parser.add_argument('--warmup_model_dir', type=str, default=None)
     parser.add_argument('--dataset_name', type=str, default='scars', help='options: cifar10, cifar100, imagenet_100, cub, scars, fgvc_aricraft, herbarium_19')
@@ -203,6 +206,8 @@ if __name__ == "__main__":
     parser.add_argument('--fp16', action='store_true', default=False)
     parser.add_argument('--print_freq', default=10, type=int)
     parser.add_argument('--exp_name', default=None, type=str)
+    parser.add_argument('--setting', type=str, default='default', help='dataset setting')
+    parser.add_argument('--eval_freq', type=int, default=10, help='eval frequency when training')
 
     # ----------------------
     # INIT
@@ -225,11 +230,13 @@ if __name__ == "__main__":
     args.interpolation = 3
     args.crop_pct = 0.875
 
-    backbone = torch.hub.load('facebookresearch/dino:main', 'dino_vitb16')
+    # backbone = torch.hub.load('facebookresearch/dino:main', 'dino_vitb16')
+    backbone = model = vits.__dict__['vit_base']()
+    pretrain_path = dino_pretrain_path
+    state_dict = torch.load(pretrain_path, map_location='cpu')
+    backbone.load_state_dict(state_dict)
 
-    if args.warmup_model_dir is not None:
-        args.logger.info(f'Loading weights from {args.warmup_model_dir}')
-        backbone.load_state_dict(torch.load(args.warmup_model_dir, map_location='cpu'))
+    
     
     # NOTE: Hardcoded image size as we do not finetune the entire ViT model
     args.image_size = 224
@@ -283,8 +290,8 @@ if __name__ == "__main__":
                               sampler=sampler, drop_last=True, pin_memory=True)
     test_loader_unlabelled = DataLoader(unlabelled_train_examples_test, num_workers=args.num_workers,
                                         batch_size=256, shuffle=False, pin_memory=False)
-    # test_loader_labelled = DataLoader(test_dataset, num_workers=args.num_workers,
-    #                                   batch_size=256, shuffle=False, pin_memory=False)
+    test_loader_labelled = DataLoader(test_dataset, num_workers=args.num_workers,
+                                      batch_size=256, shuffle=False, pin_memory=False)
 
     # ----------------------
     # PROJECTION HEAD
@@ -292,8 +299,11 @@ if __name__ == "__main__":
     projector = DINOHead(in_dim=args.feat_dim, out_dim=args.mlp_out_dim, nlayers=args.num_mlp_layers)
     model = nn.Sequential(backbone, projector).to(device)
 
+    if args.warmup_model_dir is not None:
+        args.logger.info(f'Loading weights from {args.warmup_model_dir}')
+        model.load_state_dict(torch.load(args.warmup_model_dir, map_location='cpu')['model'])
     # ----------------------
     # TRAIN
     # ----------------------
-    # train(model, train_loader, test_loader_labelled, test_loader_unlabelled, args)
-    train(model, train_loader, None, test_loader_unlabelled, args)
+    # test(model, test_loader_labelled, epoch=None, save_name='Test ACC', args=args)
+    train(model, train_loader, test_loader_labelled, test_loader_unlabelled, args)

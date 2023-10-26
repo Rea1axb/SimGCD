@@ -1,2 +1,6 @@
 __pycache__
-dev_outputs
+outputs
+pretrained_models
+.vscode
+*.out
+screenlog.*
