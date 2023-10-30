@@ -1,4 +1,4 @@
-from data.data_utils import MergedDataset
+from data.data_utils import MergedDataset, get_cifar100_coarse_labels_dict
 
 from data.cifar import get_cifar_10_datasets, get_cifar_100_datasets
 from data.herbarium_19 import get_herbarium_datasets
@@ -109,8 +109,26 @@ def get_class_splits(args):
     elif args.dataset_name == 'cifar100':
 
         args.image_size = 32
-        args.train_classes = range(80)
-        args.unlabeled_classes = range(80, 100)
+        cifar100_coarse_labels_dict = get_cifar100_coarse_labels_dict()
+        if args.setting == 'default':
+            args.train_classes = range(80)
+            args.unlabeled_classes = range(80, 100)
+        elif args.setting == 'completely_new':
+            args.train_classes = list()
+            args.unlabeled_classes = list()
+            for i in range(16):
+                args.train_classes.extend(cifar100_coarse_labels_dict[i])
+            for i in range(16, 20):
+                args.unlabeled_classes.extend(cifar100_coarse_labels_dict[i])
+        elif args.setting == 'completely_old':
+            args.train_classes = list()
+            args.unlabeled_classes = list()
+            for i in range(20):
+                for j in range(4):
+                    args.train_classes.append(cifar100_coarse_labels_dict[i][j])
+                args.unlabeled_classes.append(cifar100_coarse_labels_dict[i][4])
+        else:
+            raise NotImplementedError
 
     elif args.dataset_name == 'herbarium_19':
 

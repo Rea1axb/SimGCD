@@ -3,11 +3,12 @@
 set -e
 set -x
 
-CUDA_VISIBLE_DEVICES=2 python train.py \
+CUDA_VISIBLE_DEVICES=0 python train.py \
     --dataset_name 'cifar100' \
+    --setting 'completely_old' \
     --batch_size 128 \
     --grad_from_block 11 \
-    --epochs 80 \
+    --epochs 200 \
     --num_workers 8 \
     --use_ssb_splits \
     --sup_weight 0.35 \
@@ -18,4 +19,4 @@ CUDA_VISIBLE_DEVICES=2 python train.py \
     --teacher_temp 0.04 \
     --warmup_teacher_temp_epochs 30 \
     --memax_weight 4 \
-    --exp_name cifar100_simgcd
+    --exp_name cifar100_simgcd_completely_old
