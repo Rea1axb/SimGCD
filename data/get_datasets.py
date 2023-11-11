@@ -44,7 +44,8 @@ def get_datasets(dataset_name, train_transform, test_transform, args):
     datasets = get_dataset_f(train_transform=train_transform, test_transform=test_transform,
                             train_classes=args.train_classes,
                             prop_train_labels=args.prop_train_labels,
-                            split_train_val=False)
+                            split_train_val=False,
+                            use_coarse_label=args.use_coarse_label)
     # Set target transforms:
     target_transform_dict = {}
     for i, cls in enumerate(list(args.train_classes) + list(args.unlabeled_classes)):
@@ -57,7 +58,8 @@ def get_datasets(dataset_name, train_transform, test_transform, args):
 
     # Train split (labelled and unlabelled classes) for training
     train_dataset = MergedDataset(labelled_dataset=deepcopy(datasets['train_labelled']),
-                                  unlabelled_dataset=deepcopy(datasets['train_unlabelled']))
+                                  unlabelled_dataset=deepcopy(datasets['train_unlabelled']),
+                                  use_coarse_label=args.use_coarse_label)
 
     test_dataset = datasets['test']
     unlabelled_train_examples_test = deepcopy(datasets['train_unlabelled'])

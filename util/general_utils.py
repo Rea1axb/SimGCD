@@ -5,6 +5,9 @@ import inspect
 from datetime import datetime
 from loguru import logger
 
+from torch.utils.tensorboard import SummaryWriter
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+
 class AverageMeter(object):
     """Computes and stores the average and current value"""
     def __init__(self):
@@ -73,17 +76,23 @@ def init_experiment(args, runner_name=None, exp_id=None):
 
     print(f'Experiment saved to: {args.log_dir}')
 
+    args.writer = SummaryWriter(log_dir=args.log_dir)
+
     hparam_dict = {}
 
     for k, v in vars(args).items():
         if isinstance(v, (int, float, str, bool, torch.Tensor)):
             hparam_dict[k] = v
 
+    args.writer.add_hparams(hparam_dict=hparam_dict, metric_dict={})
+    
     print(runner_name)
     print(args)
 
     return args
 
+def get_mean_lr(optimizer):
+    return torch.mean(torch.Tensor([param_group['lr'] for param_group in optimizer.param_groups])).item()
 
 class DistributedWeightedSampler(torch.utils.data.distributed.DistributedSampler):
 

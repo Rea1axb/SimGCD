@@ -2,7 +2,7 @@ from torchvision.datasets import CIFAR10, CIFAR100
 from copy import deepcopy
 import numpy as np
 
-from data.data_utils import subsample_instances
+from data.data_utils import subsample_instances, get_cifar100_coarse_labels
 from config import cifar_10_root, cifar_100_root
 
 
@@ -27,19 +27,21 @@ class CustomCIFAR10(CIFAR10):
 
 class CustomCIFAR100(CIFAR100):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, use_coarse_label=False, *args, **kwargs):
         super(CustomCIFAR100, self).__init__(*args, **kwargs)
 
         self.uq_idxs = np.array(range(len(self)))
+        self.use_coarse_label = use_coarse_label
+        self.coarse_target = get_cifar100_coarse_labels(self.targets)
 
     def __getitem__(self, item):
         img, label = super().__getitem__(item)
+        coarse_label = self.coarse_target[item]
         uq_idx = self.uq_idxs[item]
-
-        return img, label, uq_idx
-
-    def __len__(self):
-        return len(self.targets)
+        if self.use_coarse_label:
+            return img, label, coarse_label, uq_idx
+        else:
+            return img, label, uq_idx
 
 
 def subsample_dataset(dataset, idxs):
@@ -135,12 +137,12 @@ def get_cifar_10_datasets(train_transform, test_transform, train_classes=(0, 1, 
 
 
 def get_cifar_100_datasets(train_transform, test_transform, train_classes=range(80),
-                       prop_train_labels=0.8, split_train_val=False, seed=0):
+                       prop_train_labels=0.8, split_train_val=False, seed=0, use_coarse_label=False):
 
     np.random.seed(seed)
 
     # Init entire training set
-    whole_training_set = CustomCIFAR100(root=cifar_100_root, transform=train_transform, train=True)
+    whole_training_set = CustomCIFAR100(use_coarse_label=use_coarse_label, root=cifar_100_root, transform=train_transform, train=True)
 
     # Get labelled training set which has subsampled classes, then subsample some indices from that
     train_dataset_labelled = subsample_classes(deepcopy(whole_training_set), include_classes=train_classes)
@@ -177,7 +179,7 @@ def get_cifar_100_datasets(train_transform, test_transform, train_classes=range(
 if __name__ == '__main__':
 
     x = get_cifar_100_datasets(None, None, split_train_val=False,
-                         train_classes=range(80), prop_train_labels=0.5)
+                         train_classes=range(80), prop_train_labels=0.5, use_coarse_label=True)
 
     print('Printing lens...')
     for k, v in x.items():

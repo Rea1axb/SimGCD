@@ -3,9 +3,9 @@
 set -e
 set -x
 
-CUDA_VISIBLE_DEVICES=0 python train.py \
+CUDA_VISIBLE_DEVICES=3 python train.py \
     --dataset_name 'cifar100' \
-    --setting 'completely_old' \
+    --setting 'default' \
     --batch_size 128 \
     --grad_from_block 11 \
     --epochs 200 \
@@ -19,4 +19,6 @@ CUDA_VISIBLE_DEVICES=0 python train.py \
     --teacher_temp 0.04 \
     --warmup_teacher_temp_epochs 30 \
     --memax_weight 4 \
-    --exp_name cifar100_simgcd_completely_old
+    --use_coarse_label \
+    --sup_coarse_con_weight 0.25 \
+    --exp_name cifar100_simgcd_default_coarse_label

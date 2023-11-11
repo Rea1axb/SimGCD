@@ -49,23 +49,31 @@ class MergedDataset(Dataset):
     Allows you to iterate over them in parallel
     """
 
-    def __init__(self, labelled_dataset, unlabelled_dataset):
+    def __init__(self, labelled_dataset, unlabelled_dataset, use_coarse_label=False):
 
         self.labelled_dataset = labelled_dataset
         self.unlabelled_dataset = unlabelled_dataset
+        self.use_coarse_label = use_coarse_label
         self.target_transform = None
 
     def __getitem__(self, item):
 
         if item < len(self.labelled_dataset):
-            img, label, uq_idx = self.labelled_dataset[item]
+            data = self.labelled_dataset[item]
+            # img, label, uq_idx = self.labelled_dataset[item]
             labeled_or_not = 1
 
         else:
-
-            img, label, uq_idx = self.unlabelled_dataset[item - len(self.labelled_dataset)]
+            data = self.unlabelled_dataset[item - len(self.labelled_dataset)]
+            # img, label, uq_idx = self.unlabelled_dataset[item - len(self.labelled_dataset)]
             labeled_or_not = 0
 
+        if self.use_coarse_label:
+            img, label, coarse_label, uq_idx = data
+            return img, label, coarse_label, uq_idx, np.array([labeled_or_not])
+        else:
+            img, label, uq_idx = data
+            return img, label, uq_idx, np.array([labeled_or_not])
 
         return img, label, uq_idx, np.array([labeled_or_not])
 

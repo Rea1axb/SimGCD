@@ -11,7 +11,7 @@ from tqdm import tqdm
 from data.augmentations import get_transform
 from data.get_datasets import get_datasets, get_class_splits
 
-from util.general_utils import AverageMeter, init_experiment
+from util.general_utils import AverageMeter, init_experiment, get_mean_lr
 from util.cluster_and_log_utils import log_accs_from_preds
 from util.ema_utils import EMA
 from config import exp_root, dino_pretrain_path
@@ -53,6 +53,7 @@ def train_ema(student, teacher, train_loader, test_loader, unlabelled_train_load
 
     for epoch in range(args.epochs):
         loss_record = AverageMeter()
+        train_acc_labelled = AverageMeter()
 
         student.train()
         teacher.eval()
@@ -101,6 +102,10 @@ def train_ema(student, teacher, train_loader, test_loader, unlabelled_train_load
                 loss += (1 - args.sup_weight) * contrastive_loss + args.sup_weight * sup_con_loss
                 
             # Train acc
+            _, sup_pred = sup_logits.max(1)
+            sup_acc = (sup_pred == sup_labels).float().mean().item()
+            train_acc_labelled.update(sup_acc, sup_pred.size(0))
+            
             loss_record.update(loss.item(), class_labels.size(0))
             optimizer.zero_grad()
             if fp16_scaler is None:
@@ -130,6 +135,10 @@ def train_ema(student, teacher, train_loader, test_loader, unlabelled_train_load
         # Step schedule
         exp_lr_scheduler.step()
         ema.after_train_iter(teacher, student)
+
+        args.writer.add_scalar('Loss', loss_record.avg, epoch)
+        args.writer.add_scalar('Train Acc Labelled Data', train_acc_labelled.avg, epoch)
+        args.writer.add_scalar('LR', get_mean_lr(optimizer), epoch)
 
         save_dict = {
             'model': student.state_dict(),
@@ -189,10 +198,22 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
 
     for epoch in range(args.epochs):
         loss_record = AverageMeter()
+        cls_loss_record = AverageMeter()
+        cluster_loss_record = AverageMeter()
+        sup_con_loss_record = AverageMeter()
+        contrastive_loss_record = AverageMeter()
+        if args.use_coarse_label:
+            sup_con_coarse_loss_record = AverageMeter()
+
+        train_acc_labelled = AverageMeter()
 
         student.train()
         for batch_idx, batch in enumerate(train_loader):
-            images, class_labels, uq_idxs, mask_lab = batch
+            if args.use_coarse_label:
+                images, class_labels, coarse_labels, uq_idxs, mask_lab = batch
+                coarse_labels = coarse_labels.cuda(non_blocking=True)
+            else:
+                images, class_labels, uq_idxs, mask_lab = batch
             mask_lab = mask_lab[:, 0]
 
             class_labels, mask_lab = class_labels.cuda(non_blocking=True), mask_lab.cuda(non_blocking=True).bool()
@@ -217,11 +238,15 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 contrastive_logits, contrastive_labels = info_nce_logits(features=student_proj)
                 contrastive_loss = torch.nn.CrossEntropyLoss()(contrastive_logits, contrastive_labels)
 
-                # representation learning, sup
+                # representation learning, sup                
                 student_proj = torch.cat([f[mask_lab].unsqueeze(1) for f in student_proj.chunk(2)], dim=1)
                 student_proj = torch.nn.functional.normalize(student_proj, dim=-1)
+                # fine-label
                 sup_con_labels = class_labels[mask_lab]
                 sup_con_loss = SupConLoss()(student_proj, labels=sup_con_labels)
+                # coarse-label
+                sup_con_coarse_labels = coarse_labels[mask_lab]
+                sup_con_coarse_loss = SupConLoss()(student_proj, labels=sup_con_coarse_labels)
 
                 pstr = ''
                 pstr += f'cls_loss: {cls_loss.item():.4f} '
@@ -229,12 +254,30 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 pstr += f'sup_con_loss: {sup_con_loss.item():.4f} '
                 pstr += f'contrastive_loss: {contrastive_loss.item():.4f} '
 
-                loss = 0
-                loss += (1 - args.sup_weight) * cluster_loss + args.sup_weight * cls_loss
-                loss += (1 - args.sup_weight) * contrastive_loss + args.sup_weight * sup_con_loss
+                if args.use_coarse_label:
+                    pstr += f'sup_con_coarse_loss: {sup_con_coarse_loss.item():.4f} '
+
+                loss = 0.
+                if args.use_coarse_label:
+                    loss = (1 - args.sup_weight) * cluster_loss + args.sup_weight * cls_loss + \
+                            (1 - args.sup_weight) * contrastive_loss + args.sup_weight * sup_con_loss
+                else:
+                    loss = (1 - args.sup_weight) * cluster_loss + args.sup_weight * cls_loss + \
+                            (1 - args.sup_weight) * contrastive_loss + args.sup_weight * ((1 - args.sup_coarse_con_weight) * sup_con_loss + args.sup_coarse_con_weight * sup_con_coarse_loss)
                 
             # Train acc
+            _, sup_pred = sup_logits.max(1)
+            sup_acc = (sup_pred == sup_labels).float().mean().item()
+            train_acc_labelled.update(sup_acc, sup_pred.size(0))
+
             loss_record.update(loss.item(), class_labels.size(0))
+            cls_loss_record.update(cls_loss.item(), class_labels.size(0))
+            cluster_loss_record.update(cluster_loss.item(), class_labels.size(0))
+            sup_con_loss_record.update(sup_con_loss.item(), class_labels.size(0))
+            contrastive_loss_record.update(contrastive_loss.item(), class_labels.size(0))
+            if args.use_coarse_label:
+                sup_con_coarse_loss_record.update(sup_con_coarse_loss.item(), class_labels.size(0))
+
             optimizer.zero_grad()
             if fp16_scaler is None:
                 loss.backward()
@@ -262,6 +305,16 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
 
         # Step schedule
         exp_lr_scheduler.step()
+
+        args.writer.add_scalar('Loss', loss_record.avg, epoch)
+        args.writer.add_scalar('cls loss', cls_loss_record.avg, epoch)
+        args.writer.add_scalar('cluster loss', cluster_loss_record.avg, epoch)
+        args.writer.add_scalar('sup con loss', sup_con_loss_record.avg, epoch)
+        args.writer.add_scalar('contrastive loss', contrastive_loss_record.avg, epoch)
+        if args.use_coarse_label:
+            args.writer.add_scalar('sup con coarse loss', sup_con_coarse_loss_record.avg, epoch)
+        args.writer.add_scalar('Train Acc Labelled Data', train_acc_labelled.avg, epoch)
+        args.writer.add_scalar('LR', get_mean_lr(optimizer), epoch) 
 
         save_dict = {
             'model': student.state_dict(),
@@ -347,9 +400,13 @@ if __name__ == "__main__":
     parser.add_argument('--exp_name', default=None, type=str)
     parser.add_argument('--setting', type=str, default='default', help='dataset setting')
     parser.add_argument('--eval_freq', type=int, default=10, help='eval frequency when training')
+
+    parser.add_argument('--use_coarse_label', action='store_true', default=False)
+    parser.add_argument('--sup_coarse_con_weight', type=float, default=0.5)
+
     parser.add_argument('--use_ema', action='store_true', default=False)
     parser.add_argument('--momentum_ema', type=float, default=0.999)
-    parser.add_argument('--interval_ema', type=int, default=1)
+    parser.add_argument('--interval_ema', type=int, default=1, help='ema update interval')
 
     # ----------------------
     # INIT
