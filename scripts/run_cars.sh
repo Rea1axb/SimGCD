@@ -3,7 +3,7 @@
 set -e
 set -x
 
-CUDA_VISIBLE_DEVICES=3 python train.py \
+CUDA_VISIBLE_DEVICES=0 python train.py \
     --dataset_name 'scars' \
     --setting 'default' \
     --batch_size 128 \
@@ -19,4 +19,6 @@ CUDA_VISIBLE_DEVICES=3 python train.py \
     --teacher_temp 0.04 \
     --warmup_teacher_temp_epochs 30 \
     --memax_weight 1 \
-    --exp_name scars_simgcd_default
+    --use_ema \
+    --momentum_ema 0.99 \
+    --exp_name scars_ema0.99_simgcd_default
