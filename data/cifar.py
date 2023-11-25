@@ -160,7 +160,7 @@ def get_cifar_100_datasets(train_transform, test_transform, train_classes=range(
     train_dataset_unlabelled = subsample_dataset(deepcopy(whole_training_set), np.array(list(unlabelled_indices)))
 
     # Get test set for all classes
-    test_dataset = CustomCIFAR100(root=cifar_100_root, transform=test_transform, train=False)
+    test_dataset = CustomCIFAR100(use_coarse_label=use_coarse_label, root=cifar_100_root, transform=test_transform, train=False)
 
     # Either split train into train and val or use test set as val
     train_dataset_labelled = train_dataset_labelled_split if split_train_val else train_dataset_labelled

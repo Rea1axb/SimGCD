@@ -213,7 +213,7 @@ def get_train_val_indices(train_dataset, val_split=0.2):
 
 
 def get_aircraft_datasets(train_transform, test_transform, train_classes=range(50), prop_train_labels=0.8,
-                    split_train_val=False, seed=0):
+                    split_train_val=False, seed=0, use_coarse_label=False):
 
     np.random.seed(seed)
 

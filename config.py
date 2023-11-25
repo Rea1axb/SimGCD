@@ -3,7 +3,7 @@
 # -----------------
 cifar_10_root = '/home/czq/data/CIFAR10'
 cifar_100_root = '/home/czq/data/CIFAR100'
-cub_root = '/home/czq/data/cub'
+cub_root = '/home/czq/data/CUB'
 aircraft_root = '/home/czq/data/fgvc-aircraft-2013b'
 car_root = '/home/czq/data/stanford_cars'
 herbarium_dataroot = '/home/czq/data/herbarium_19'

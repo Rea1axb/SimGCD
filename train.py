@@ -244,9 +244,10 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 # fine-label
                 sup_con_labels = class_labels[mask_lab]
                 sup_con_loss = SupConLoss()(student_proj, labels=sup_con_labels)
-                # coarse-label
-                sup_con_coarse_labels = coarse_labels[mask_lab]
-                sup_con_coarse_loss = SupConLoss()(student_proj, labels=sup_con_coarse_labels)
+                if args.use_coarse_label:
+                    # coarse-label
+                    sup_con_coarse_labels = coarse_labels[mask_lab]
+                    sup_con_coarse_loss = SupConLoss()(student_proj, labels=sup_con_coarse_labels)
 
                 pstr = ''
                 pstr += f'cls_loss: {cls_loss.item():.4f} '
@@ -260,10 +261,10 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 loss = 0.
                 if args.use_coarse_label:
                     loss = (1 - args.sup_weight) * cluster_loss + args.sup_weight * cls_loss + \
-                            (1 - args.sup_weight) * contrastive_loss + args.sup_weight * sup_con_loss
+                            (1 - args.sup_weight) * contrastive_loss + args.sup_weight * ((1 - args.sup_coarse_con_weight) * sup_con_loss + args.sup_coarse_con_weight * sup_con_coarse_loss)
                 else:
                     loss = (1 - args.sup_weight) * cluster_loss + args.sup_weight * cls_loss + \
-                            (1 - args.sup_weight) * contrastive_loss + args.sup_weight * ((1 - args.sup_coarse_con_weight) * sup_con_loss + args.sup_coarse_con_weight * sup_con_coarse_loss)
+                            (1 - args.sup_weight) * contrastive_loss + args.sup_weight * sup_con_loss
                 
             # Train acc
             _, sup_pred = sup_logits.max(1)
@@ -350,7 +351,11 @@ def test(model, test_loader, epoch, save_name, args):
 
     preds, targets = [], []
     mask = np.array([])
-    for batch_idx, (images, label, _) in enumerate(tqdm(test_loader)):
+    for batch_idx, data in enumerate(tqdm(test_loader)):
+        if args.use_coarse_label:
+            (images, label, coarse_label, _) = data
+        else:
+            (images, label, _) = data
         images = images.cuda(non_blocking=True)
         with torch.no_grad():
             _, logits = model(images)

@@ -19,6 +19,7 @@ CUDA_VISIBLE_DEVICES=3 python train.py \
     --teacher_temp 0.04 \
     --warmup_teacher_temp_epochs 30 \
     --memax_weight 4 \
+    --eval_freq 10 \
     --use_coarse_label \
-    --sup_coarse_con_weight 0.25 \
-    --exp_name cifar100_simgcd_default_coarse_label
+    --sup_coarse_con_weight 0.1 \
+    --exp_name cifar100_simgcd_default_coarselabel0.1
