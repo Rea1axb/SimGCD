@@ -18,3 +18,4 @@ osr_split_dir = 'data/ssb_splits'
 exp_root = 'outputs' # All logs and checkpoints will be saved here
 feature_extract_dir = './extracted_features'
 dino_pretrain_path = './pretrained_models/dino_vitbase16_pretrain.pth'
+resnet_pretrain_path = './pretrained_models/simclr_cifar_100.pth.tar'
