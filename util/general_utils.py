@@ -88,6 +88,7 @@ def init_experiment(args, runner_name=None, exp_id=None):
     
     print(runner_name)
     print(args)
+    args.logger.info(args)
 
     return args
 
