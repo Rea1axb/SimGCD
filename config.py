@@ -1,13 +1,13 @@
 # -----------------
 # DATASET ROOTS
 # -----------------
-cifar_10_root = '/home/czq/data/CIFAR10'
-cifar_100_root = '/home/czq/data/CIFAR100'
-cub_root = '/home/czq/data/CUB'
-aircraft_root = '/home/czq/data/fgvc-aircraft-2013b'
-car_root = '/home/czq/data/stanford_cars'
-herbarium_dataroot = '/home/czq/data/herbarium_19'
-imagenet_root = '/home/czq/data/ImageNet'
+cifar_10_root = '../../../data/CIFAR10'
+cifar_100_root = '../../../data/CIFAR100'
+cub_root = '../../../data/CUB'
+aircraft_root = '../../../data/fgvc-aircraft-2013b'
+car_root = '../../../data/stanford_cars'
+herbarium_dataroot = '../../../data/herbarium_19'
+imagenet_root = '../../../data/ImageNet'
 
 # OSR Split dir
 osr_split_dir = 'data/ssb_splits'
