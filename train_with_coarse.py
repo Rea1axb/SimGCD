@@ -134,9 +134,9 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 coarse_loss = 0.
                 # coarse_loss = args.sup_weight * (coarse_sup_con_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
                 # NOTE: only unsup coarse loss
-                # coarse_loss = coarse_cluster_loss + coarse_contrastive_loss
+                coarse_loss = coarse_cluster_loss + coarse_contrastive_loss
                 # NOTE: only coarse cluster loss
-                coarse_loss = coarse_cluster_loss
+                # coarse_loss = coarse_cluster_loss
                 loss = 0.
                 loss = args.fine_weight * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
                 
@@ -232,7 +232,8 @@ def test(model, test_loader, epoch, save_name, args):
         (images, label, _) = data
         images = images.cuda(non_blocking=True)
         with torch.no_grad():
-            _, _, _, logits, coarse_logits = model(images)
+            # _, _, _, logits, coarse_logits = model(images)
+            logits = model.predict(images)
             # _, logits, coarse_logits = model(images)
             preds.append(logits.argmax(1).cpu().numpy())
             targets.append(label.cpu().numpy())

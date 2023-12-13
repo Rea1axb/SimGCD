@@ -66,6 +66,18 @@ class TwoHead(nn.Module):
             nn.GELU(),
             nn.Linear(hidden_dim, in_dim)
         )
+        self.proj_fine = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, in_dim)
+        )
+        self.proj_coarse = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, in_dim)
+        )
         self.apply(self._init_weights)
         self.fine_last_layer = nn.utils.weight_norm(nn.Linear(in_dim, out_dim_fine, bias=False))
         self.coarse_last_layer = nn.utils.weight_norm(nn.Linear(in_dim, out_dim_coarse, bias=False))
@@ -86,13 +98,24 @@ class TwoHead(nn.Module):
     def forward(self, x):
         x_proj = self.mlp(x)
         x_pred = self.predictor(x)
+        x_fine = self.proj_fine(x)
+        x_coarse = self.proj_coarse(x)
+        x_fine = nn.functional.normalize(x_fine, dim=-1, p=2)
+        x_coarse = nn.functional.normalize(x_coarse, dim=-1, p=2)
         x = nn.functional.normalize(x, dim=-1, p=2)
         x_pred = nn.functional.normalize(x_pred, dim=-1, p=2)
         # x = x.detach()
-        fine_logits = self.fine_last_layer(x)
-        coarse_logits = self.coarse_last_layer(x)
+        fine_logits = self.fine_last_layer(x_fine)
+        coarse_logits = self.coarse_last_layer(x_coarse)
         return x, x_pred, x_proj, fine_logits, coarse_logits
     
+    @torch.no_grad()
+    def predict(self, x):
+        x_fine = self.proj_fine(x)
+        x_fine = nn.functional.normalize(x_fine, dim=-1, p=2)
+        fine_logits = self.fine_last_layer(x_fine)
+        return fine_logits
+
     def get_coarse_prototypes(self, proj=True):
         coarse_weight = self.coarse_last_layer.weight
         if proj:
