@@ -228,15 +228,30 @@ def log_accs_from_preds(y_true, y_pred, mask, eval_funcs, save_name, T=None,
             print_str = f'Epoch {T}, {log_name}: All {all_acc:.4f} | Old {old_acc:.4f} | New {new_acc:.4f}'
             print(print_str)
             args.logger.info(print_str)
-        # if print_output:
-        #     print_str = f'Epoch {T}, {log_name}: All {all_acc:.4f} | Old {old_acc:.4f} | New {new_acc:.4f}'
-        #     try:
-        #         if dist.get_rank() == 0:
-        #             try:
-        #                 args.logger.info(print_str)
-        #             except:
-        #                 print(print_str)
-        #     except:
-        #         pass
 
     return to_return
+
+def log_coarse_accs_from_preds(y_true, y_pred, save_name, T=None,
+                        print_output=True, args=None):
+    """
+    Given a list of evaluation functions to use (e.g ['v1', 'v2']) evaluate and log ACC results
+
+    :param y_true: GT labels
+    :param y_pred: Predicted indices
+    :param T: Epoch
+    :param save_name: What are we evaluating ACC on
+    :param writer: Tensorboard logger
+    :return:
+    """
+    y_true = y_true.astype(int)
+    y_pred = y_pred.astype(int)
+    coarse_acc = cluster_acc(y_true, y_pred)
+    log_name = f'{save_name}_Coarse'
+    if args.writer is not None:
+        args.writer.add_scalar(log_name, coarse_acc, T)
+    if print_output:
+        print_str = f'Epoch {T}, {log_name}: {coarse_acc:.4f}'
+        print(print_str)
+        args.logger.info(print_str)
+
+    return coarse_acc

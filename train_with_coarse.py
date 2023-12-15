@@ -13,7 +13,7 @@ from data.augmentations import get_transform
 from data.get_datasets import get_datasets, get_class_splits
 
 from util.general_utils import AverageMeter, init_experiment, get_mean_lr
-from util.cluster_and_log_utils import log_accs_from_preds
+from util.cluster_and_log_utils import log_accs_from_preds, log_coarse_accs_from_preds, cluster_acc
 from util.ema_utils import EMA
 from config import exp_root, dino_pretrain_path, resnet_pretrain_path
 from model import DINOHead, CoarseHead, TwoHead, info_nce_logits, coarse_info_nce_logits, SupConLoss, CoarseSupConLoss, DistillLoss, ContrastiveLearningViewGenerator, get_params_groups
@@ -67,10 +67,16 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
         coarse_contrastive_loss_record = AverageMeter()
 
         train_acc_labelled = AverageMeter()
+        if args.use_coarse_label:
+            train_acc_coarse_labelled = AverageMeter()
 
         student.train()
         for batch_idx, batch in enumerate(train_loader):
-            images, class_labels, uq_idxs, mask_lab = batch
+            if args.use_coarse_label:
+                images, class_labels, coarse_labels, uq_idxs, mask_lab = batch
+                coarse_labels = coarse_labels.cuda(non_blocking=True)
+            else:
+                images, class_labels, uq_idxs, mask_lab = batch
             mask_lab = mask_lab[:, 0]
 
             class_labels, mask_lab = class_labels.cuda(non_blocking=True), mask_lab.cuda(non_blocking=True).bool()
@@ -86,6 +92,10 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 sup_logits = torch.cat([f[mask_lab] for f in (student_out / 0.1).chunk(2)], dim=0)
                 sup_labels = torch.cat([class_labels[mask_lab] for _ in range(2)], dim=0)
                 cls_loss = nn.CrossEntropyLoss()(sup_logits, sup_labels)
+
+                if args.use_coarse_label:
+                    sup_coarse_logits = torch.cat([f[mask_lab] for f in student_coarse_out.chunk(2)], dim=0)
+                    sup_coarse_labels = torch.cat([class_labels[mask_lab] for _ in range(2)], dim=0)
 
                 # clustering, unsup
                 cluster_loss = cluster_criterion(student_out, teacher_out, epoch)
@@ -145,6 +155,11 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
             sup_acc = (sup_pred == sup_labels).float().mean().item()
             train_acc_labelled.update(sup_acc, sup_pred.size(0))
 
+            if args.use_coarse_label:
+                _, sup_coarse_pred = sup_coarse_logits.max(1)
+                sup_coarse_acc = cluster_acc(y_true=sup_coarse_labels.cpu().numpy(), y_pred=sup_coarse_pred.cpu().numpy())
+                train_acc_coarse_labelled.update(sup_coarse_acc, sup_coarse_pred.size(0))
+
             loss_record.update(loss.item(), class_labels.size(0))
             cls_loss_record.update(cls_loss.item(), class_labels.size(0))
             cluster_loss_record.update(cluster_loss.item(), class_labels.size(0))
@@ -172,13 +187,14 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
 
         if (epoch + 1) % args.eval_freq == 0:
             args.logger.info('Testing on unlabelled examples in the training data...')
-            all_acc, old_acc, new_acc = test(student, unlabelled_train_loader, epoch=epoch, save_name='Train ACC Unlabelled', args=args)
+            all_acc, old_acc, new_acc, coarse_acc = test(student, unlabelled_train_loader, epoch=epoch, save_name='Train ACC Unlabelled', args=args)
             args.logger.info('Testing on disjoint test set...')
-            all_acc_test, old_acc_test, new_acc_test = test(student, test_loader, epoch=epoch, save_name='Test ACC', args=args)
-
-
+            all_acc_test, old_acc_test, new_acc_test, coarse_acc_test = test(student, test_loader, epoch=epoch, save_name='Test ACC', args=args)
             args.logger.info('Train Accuracies: All {:.4f} | Old {:.4f} | New {:.4f}'.format(all_acc, old_acc, new_acc))
             args.logger.info('Test Accuracies: All {:.4f} | Old {:.4f} | New {:.4f}'.format(all_acc_test, old_acc_test, new_acc_test))
+            if args.use_coarse_label:
+                args.logger.info('Train Coarse Accuracies: {:.4f}'.format(coarse_acc))
+                args.logger.info('Test Coarse Accuracies: {:.4f}'.format(coarse_acc_test))
 
         # Step schedule
         exp_lr_scheduler.step()
@@ -192,6 +208,8 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
         args.writer.add_scalar('coarse sup con loss', coarse_sup_con_loss_record.avg, epoch)
         args.writer.add_scalar('coarse contrastive loss', coarse_contrastive_loss_record.avg, epoch)
         args.writer.add_scalar('Train Acc Labelled Data', train_acc_labelled.avg, epoch)
+        if args.use_coarse_label:
+            args.writer.add_scalar('Train Acc Coarse Labelled Data', train_acc_coarse_labelled.avg, epoch)
         args.writer.add_scalar('LR', get_mean_lr(optimizer), epoch) 
 
         save_dict = {
@@ -227,9 +245,15 @@ def test(model, test_loader, epoch, save_name, args):
     model.eval()
 
     preds, targets = [], []
+    coarse_acc = 0.
+    if args.use_coarse_label:
+        coarse_preds, coarse_targets = [], []
     mask = np.array([])
     for batch_idx, data in enumerate(tqdm(test_loader)):
-        (images, label, _) = data
+        if args.use_coarse_label:
+            (images, label, coarse_label, _) = data
+        else:
+            (images, label, _) = data
         images = images.cuda(non_blocking=True)
         with torch.no_grad():
             _, _, _, logits, coarse_logits = model(images)
@@ -237,6 +261,9 @@ def test(model, test_loader, epoch, save_name, args):
             preds.append(logits.argmax(1).cpu().numpy())
             targets.append(label.cpu().numpy())
             mask = np.append(mask, np.array([True if x.item() in range(len(args.train_classes)) else False for x in label]))
+            if args.use_coarse_label:
+                coarse_preds.append(coarse_logits.argmax(1).cpu().numpy())
+                coarse_targets.append(coarse_label.cpu().numpy())
 
     preds = np.concatenate(preds)
     targets = np.concatenate(targets)
@@ -244,8 +271,13 @@ def test(model, test_loader, epoch, save_name, args):
                                                     T=epoch, eval_funcs=args.eval_funcs, save_name=save_name,
                                                     args=args)
 
-    return all_acc, old_acc, new_acc
+    if args.use_coarse_label:
+        coarse_preds = np.concatenate(coarse_preds)
+        coarse_targets = np.concatenate(coarse_targets)
+        coarse_acc = log_coarse_accs_from_preds(y_true=coarse_targets, y_pred=coarse_preds,
+                                            T=epoch, save_name=save_name, args=args)
 
+    return all_acc, old_acc, new_acc, coarse_acc
 
 if __name__ == "__main__":
 
