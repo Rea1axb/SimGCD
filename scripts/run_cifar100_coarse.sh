@@ -3,7 +3,7 @@
 set -e
 set -x
 
-CUDA_VISIBLE_DEVICES=3 python train_with_coarse.py \
+CUDA_VISIBLE_DEVICES=0 python train_with_coarse.py \
     --dataset_name 'cifar100' \
     --setting 'default' \
     --batch_size 128 \
@@ -21,10 +21,11 @@ CUDA_VISIBLE_DEVICES=3 python train_with_coarse.py \
     --memax_weight 4 \
     --eval_freq 10 \
     --fine_weight 1.0 \
-    --warmup_coarse_weight 1.5 \
-    --coarse_weight 0.1 \
+    --warmup_coarse_weight 0.0 \
+    --coarse_weight 0.0 \
     --warmup_coarse_weight_epochs 30 \
-    --exp_name cifar100_simgcd_default_twohead_clustercoarse_weight0.1
+    --use_coarse_label \
+    --exp_name cifar100_simgcd_default_twohead_clustercoarse_weight0.0
 
 # CUDA_VISIBLE_DEVICES=3 python train.py \
 #     --dataset_name 'cifar100' \
