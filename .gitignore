@@ -5,3 +5,4 @@ pretrained_models
 *.out
 screenlog.*
 *.ipynb
+extracted_features

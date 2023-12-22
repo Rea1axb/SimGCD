@@ -93,11 +93,18 @@ class TwoHead(nn.Module):
         coarse_logits = self.coarse_last_layer(x)
         return x, x_pred, x_proj, fine_logits, coarse_logits
     
+    # NOTE: in pytorch 1.12, The weight is recomputed once at module forward, so use the following two functions after module forward
     def get_coarse_prototypes(self, proj=True):
         coarse_weight = self.coarse_last_layer.weight
         if proj:
             coarse_weight = self.mlp(coarse_weight)
         return coarse_weight
+    
+    def get_fine_prototypes(self, proj=True):
+        fine_weight = self.fine_last_layer.weight
+        if proj:
+            fine_weight = self.mlp(fine_weight)
+        return fine_weight
 
 
 class CoarseHead(nn.Module):
@@ -408,12 +415,40 @@ class DistillLoss(nn.Module):
         total_loss /= n_loss_terms
         return total_loss
 
+class TCALoss(nn.Module):
+    def __init__(self, temperature=1.0) -> None:
+        super().__init__()
+        self.temperature = temperature
+
+    def forward(self, coarse_logits, fine_labels, coarse_prototypes, fine_prototypes):
+        similarity_cf = torch.matmul(coarse_prototypes, fine_prototypes.T)
+        fine_logits = torch.matmul(coarse_logits / self.temperature, similarity_cf)
+        loss = nn.CrossEntropyLoss()(fine_logits, fine_labels)
+        return loss
+        
+
+
 if __name__ == "__main__":
     in_dim = 768
     out_dim_fine = 100
     out_dim_coarse = 20
 
-    two_head = TwoHead(in_dim=in_dim, out_dim_fine=out_dim_fine, out_dim_coarse=out_dim_coarse, use_bn=True)
-    input = torch.randn((32, 768))
-    out = two_head(input)
-    prototypes = two_head.get_coarse_prototypes()
+    model = TwoHead(in_dim=in_dim, out_dim_fine=out_dim_fine, out_dim_coarse=out_dim_coarse, use_bn=False)
+    for i in range(3):
+        input = torch.randn((32, 768))
+        # 生成随机整数标签
+        random_labels = torch.randint(0, 100, size=(32,))
+        # 使用 torch.eye() 和索引操作转换为 one-hot 矩阵
+        labels = torch.eye(100)[random_labels]
+        x, x_pred, x_proj, fine_logits, coarse_logits = model(input)
+        coarse_prototypes = model.get_coarse_prototypes(proj=False)
+        fine_prototypes = model.get_fine_prototypes(proj=False)
+        criterion = TCALoss()
+        loss = criterion(coarse_logits, labels, coarse_prototypes, fine_prototypes)
+        opt = torch.optim.Adam(model.parameters(), lr=0.1)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        coarse_prototypes = model.get_coarse_prototypes(proj=False)
+        fine_prototypes = model.get_fine_prototypes(proj=False)
+        print(loss)

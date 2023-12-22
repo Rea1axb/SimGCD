@@ -1,4 +1,6 @@
+from collections import OrderedDict
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader
 # import timm
 from torchvision import transforms
@@ -9,7 +11,7 @@ import os
 from tqdm import tqdm
 
 from data.stanford_cars import CarsDataset
-from data.cifar import CustomCIFAR10, CustomCIFAR100, cifar_10_root, cifar_100_root
+from data.cifar import CustomCIFAR10, CustomCIFAR100, cifar_10_root, cifar_100_root, get_cifar_100_small_datasets
 from data.herbarium_19 import HerbariumDataset19, herbarium_dataroot
 from data.augmentations import get_transform
 from data.imagenet import get_imagenet_100_datasets
@@ -18,6 +20,7 @@ from data.cub import CustomCub2011, cub_root
 from data.fgvc_aircraft import FGVCAircraft, aircraft_root
 
 from vit_model import vision_transformer as vits
+from model import TwoHead
 
 # from project_utils.general_utils import strip_state_dict, str2bool
 from copy import deepcopy
@@ -31,7 +34,6 @@ def extract_features_dino(model, loader, save_dir, extract_block=False):
 
     with torch.no_grad():
         for batch_idx, batch in enumerate(tqdm(loader)):
-
             images, labels, idxs = batch[:3]
             images = images.to(device)
             if extract_block:
@@ -43,7 +45,7 @@ def extract_features_dino(model, loader, save_dir, extract_block=False):
                         save_path = os.path.join(save_dir, f'layer_{layer}', f'{t}', f'{uq}.npy')
                         torch.save(f.detach().cpu().numpy(), save_path)
             else:
-                features = model(images)         # CLS_Token for ViT, Average pooled vector for R50
+                features = model.backbone(images)         # CLS_Token for ViT, Average pooled vector for R50
 
                 # Save features
                 for f, t, uq in zip(features, labels, idxs):
@@ -88,11 +90,12 @@ if __name__ == "__main__":
     parser.add_argument('--root_dir', type=str, default=feature_extract_dir)
     parser.add_argument('--warmup_model_dir', type=str,
                         default=None)
-    parser.add_argument('--use_best_model', type='store_true', default=False)
+    # parser.add_argument('--use_best_model', type='store_true', default=False)
     parser.add_argument('--model_name', type=str, default='vit_dino', help='Format is {model_name}_{pretrain}')
     parser.add_argument('--dataset', type=str, default='aircraft', help='options: cifar10, cifar100, scars')
     parser.add_argument('--setting', type=str, default='default', help='dataset setting')
-    parser.add_argument('--extract_block', type='store_true', default=False, help='extract feature from all blocks')
+    parser.add_argument('--extract_block', action='store_true', default=False, help='extract feature from all blocks')
+    parser.add_argument('--exp_name', default=None, type=str)
 
     # ----------------------
     # INIT
@@ -100,63 +103,13 @@ if __name__ == "__main__":
     args = parser.parse_args()
     device = torch.device('cuda:0')
 
-    args.save_dir = os.path.join(args.root_dir, f'{args.model_name}_{args.dataset}_{args.setting}')
+    args.save_dir = os.path.join(args.root_dir, f'{args.exp_name}')
     print(args)
 
-    print('Loading model...')
-    # ----------------------
-    # MODEL
-    # ----------------------
-    if args.model_name == 'vit_dino':
+    args.interpolation = 3
+    args.crop_pct = 0.875
+    _, val_transform = get_transform('imagenet', image_size=224, args=args)
 
-        extract_features_func = extract_features_dino
-        args.interpolation = 3
-        args.crop_pct = 0.875
-        pretrain_path = dino_pretrain_path
-
-        # model = torch.hub.load('facebookresearch/dino:main', 'dino_vitb16', pretrained=False)
-        model = vits.__dict__['vit_base']()
-
-        state_dict = torch.load(pretrain_path, map_location='cpu')
-        model.load_state_dict(state_dict)
-
-        _, val_transform = get_transform('imagenet', image_size=224, args=args)
-
-    elif args.model_name == 'resnet50_dino':
-
-        extract_features_func = extract_features_dino
-        args.interpolation = 3
-        args.crop_pct = 0.875
-        pretrain_path = '/work/sagar/pretrained_models/dino/dino_resnet50_pretrain.pth'
-
-        model = torch.hub.load('facebookresearch/dino:main', 'dino_resnet50', pretrained=False)
-
-        state_dict = torch.load(pretrain_path, map_location='cpu')
-        model.load_state_dict(state_dict)
-
-        _, val_transform = get_transform('imagenet', image_size=224, args=args)
-
-    else:
-
-        raise NotImplementedError
-
-    if args.warmup_model_dir is not None:
-
-        warmup_id = args.warmup_model_dir.split('(')[1].split(')')[0]
-
-        if args.use_best_model:
-            args.warmup_model_dir = args.warmup_model_dir[:-3] + '_best.pt'
-            args.save_dir += '_(' + args.warmup_model_dir.split('(')[1].split(')')[0] + ')_best'
-        else:
-            args.save_dir += '_(' + args.warmup_model_dir.split('(')[1].split(')')[0] + ')'
-
-        print(f'Using weights from {args.warmup_model_dir} ...')
-        state_dict = torch.load(args.warmup_model_dir)
-        model.load_state_dict(state_dict)
-        if args.extract_block:
-            args.save_dir += '_block'
-
-        print(f'Saving to {args.save_dir}')
 
     print('Loading data...')
     # ----------------------
@@ -173,6 +126,24 @@ if __name__ == "__main__":
         train_dataset = CustomCIFAR100(root=cifar_100_root, train=True, transform=val_transform)
         test_dataset = CustomCIFAR100(root=cifar_100_root, train=False, transform=val_transform)
         targets = list(set(train_dataset.targets))
+        args.coarse_out_dim = 20
+        args.mlp_out_dim = 100
+
+    elif args.dataset == 'cifar100small':
+
+        datasets = get_cifar_100_small_datasets(train_transform=val_transform, test_transform=val_transform,
+                                               train_classes=range(80),
+                                               prop_train_labels=0.5)
+        datasets['train_labelled'].target_transform = None
+        datasets['train_unlabelled'].target_transform = None
+        train_dataset = MergedDataset(labelled_dataset=deepcopy(datasets['train_labelled']),
+                                      unlabelled_dataset=deepcopy(datasets['train_unlabelled']),
+                                      )
+
+        test_dataset = datasets['test']
+        targets = list(set(test_dataset.targets))
+        args.coarse_out_dim = 20
+        args.mlp_out_dim = 100
 
     elif args.dataset == 'scars':
 
@@ -202,7 +173,7 @@ if __name__ == "__main__":
 
         train_dataset = MergedDataset(labelled_dataset=deepcopy(datasets['train_labelled']),
                                       unlabelled_dataset=deepcopy(datasets['train_unlabelled']),
-                                      use_coarse_label=args.use_coarse_label)
+                                      )
 
         test_dataset = datasets['test']
         targets = list(set(test_dataset.targets))
@@ -223,6 +194,36 @@ if __name__ == "__main__":
     else:
 
         raise NotImplementedError
+
+    print('Loading model...')
+    # ----------------------
+    # MODEL
+    # ----------------------
+    if args.model_name == 'twohead':
+
+        extract_features_func = extract_features_dino
+        args.feat_dim = 768
+        args.image_size = 224
+        args.num_mlp_layers = 3
+        backbone = vits.__dict__['vit_base']()
+        projector = TwoHead(in_dim=args.feat_dim, out_dim_fine=args.mlp_out_dim, out_dim_coarse=args.coarse_out_dim, mlp_nlayers=args.num_mlp_layers)
+        model = nn.Sequential(OrderedDict([
+            ('backbone', backbone),
+            ('projector', projector)
+        ]))
+
+    else:
+
+        raise NotImplementedError
+
+    if args.warmup_model_dir is not None:
+
+        print(f'Using weights from {args.warmup_model_dir} ...')
+        model.load_state_dict(torch.load(args.warmup_model_dir, map_location='cpu')['model'])
+        if args.extract_block:
+            args.save_dir += '_block'
+
+        print(f'Saving to {args.save_dir}')
 
     # ----------------------
     # DATALOADER

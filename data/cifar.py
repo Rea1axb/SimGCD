@@ -1,3 +1,4 @@
+from typing import Callable, Optional
 from torchvision.datasets import CIFAR10, CIFAR100
 from copy import deepcopy
 import numpy as np
@@ -32,11 +33,11 @@ class CustomCIFAR100(CIFAR100):
 
         self.uq_idxs = np.array(range(len(self)))
         self.use_coarse_label = use_coarse_label
-        self.coarse_target = get_cifar100_coarse_labels(self.targets)
+        self.coarse_targets = get_cifar100_coarse_labels(self.targets)
 
     def __getitem__(self, item):
         img, label = super().__getitem__(item)
-        coarse_label = self.coarse_target[item]
+        coarse_label = self.coarse_targets[item]
         uq_idx = self.uq_idxs[item]
         if self.use_coarse_label:
             return img, label, coarse_label, uq_idx
@@ -52,6 +53,7 @@ def subsample_dataset(dataset, idxs):
 
         dataset.data = dataset.data[idxs]
         dataset.targets = np.array(dataset.targets)[idxs].tolist()
+        dataset.coarse_targets = np.array(dataset.coarse_targets)[idxs].tolist()
         dataset.uq_idxs = dataset.uq_idxs[idxs]
 
         return dataset
@@ -160,6 +162,50 @@ def get_cifar_100_datasets(train_transform, test_transform, train_classes=range(
     train_dataset_unlabelled = subsample_dataset(deepcopy(whole_training_set), np.array(list(unlabelled_indices)))
 
     # Get test set for all classes
+    test_dataset = CustomCIFAR100(use_coarse_label=use_coarse_label, root=cifar_100_root, transform=test_transform, train=False)
+
+    # Either split train into train and val or use test set as val
+    train_dataset_labelled = train_dataset_labelled_split if split_train_val else train_dataset_labelled
+    val_dataset_labelled = val_dataset_labelled_split if split_train_val else None
+
+    all_datasets = {
+        'train_labelled': train_dataset_labelled,
+        'train_unlabelled': train_dataset_unlabelled,
+        'val': val_dataset_labelled,
+        'test': test_dataset,
+    }
+
+    return all_datasets
+
+def get_cifar_100_small_datasets(train_transform, test_transform, train_classes=range(80),
+                       prop_train_labels=0.8, split_train_val=False, seed=0, use_coarse_label=False, prop_small=0.25):
+
+    np.random.seed(seed)
+
+    # Init entire training set
+    whole_training_set = CustomCIFAR100(use_coarse_label=use_coarse_label, root=cifar_100_root, transform=train_transform, train=True)
+
+    # Get small train dataset
+    small_indices = subsample_instances(deepcopy(whole_training_set), prop_indices_to_subsample=prop_small)
+    small_whole_training_set = subsample_dataset(deepcopy(whole_training_set), small_indices)
+
+    # Get labelled training set which has subsampled classes, then subsample some indices from that
+    train_dataset_labelled = subsample_classes(deepcopy(small_whole_training_set), include_classes=train_classes)
+    subsample_indices = subsample_instances(train_dataset_labelled, prop_indices_to_subsample=prop_train_labels)
+    train_dataset_labelled = subsample_dataset(train_dataset_labelled, subsample_indices)
+
+    # Split into training and validation sets
+    train_idxs, val_idxs = get_train_val_indices(train_dataset_labelled)
+    train_dataset_labelled_split = subsample_dataset(deepcopy(train_dataset_labelled), train_idxs)
+    val_dataset_labelled_split = subsample_dataset(deepcopy(train_dataset_labelled), val_idxs)
+    val_dataset_labelled_split.transform = test_transform
+
+    # Get unlabelled data
+    unlabelled_indices = set(small_whole_training_set.uq_idxs) - set(train_dataset_labelled.uq_idxs)
+    train_dataset_unlabelled = subsample_dataset(deepcopy(whole_training_set), np.array(list(unlabelled_indices)))
+
+    # Get test set for all classes
+    # NOTE: use whole test set
     test_dataset = CustomCIFAR100(use_coarse_label=use_coarse_label, root=cifar_100_root, transform=test_transform, train=False)
 
     # Either split train into train and val or use test set as val

@@ -1,6 +1,6 @@
 from data.data_utils import MergedDataset, get_cifar100_coarse_labels_dict
 
-from data.cifar import get_cifar_10_datasets, get_cifar_100_datasets
+from data.cifar import get_cifar_10_datasets, get_cifar_100_datasets, get_cifar_100_small_datasets
 from data.herbarium_19 import get_herbarium_datasets
 from data.stanford_cars import get_scars_datasets
 from data.imagenet import get_imagenet_100_datasets, get_imagenet_1k_datasets
@@ -17,6 +17,7 @@ from config import osr_split_dir
 get_dataset_funcs = {
     'cifar10': get_cifar_10_datasets,
     'cifar100': get_cifar_100_datasets,
+    'cifar100small': get_cifar_100_small_datasets,
     'imagenet_100': get_imagenet_100_datasets,
     'imagenet_1k': get_imagenet_1k_datasets,
     'herbarium_19': get_herbarium_datasets,
@@ -108,7 +109,7 @@ def get_class_splits(args):
         else:
             raise NotImplementedError
 
-    elif args.dataset_name == 'cifar100':
+    elif args.dataset_name == 'cifar100' or args.dataset_name == 'cifar100small':
 
         args.image_size = 32
         cifar100_coarse_labels_dict = get_cifar100_coarse_labels_dict()

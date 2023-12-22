@@ -3,8 +3,8 @@
 set -e
 set -x
 
-CUDA_VISIBLE_DEVICES=0 python train_with_coarse.py \
-    --dataset_name 'cifar100' \
+CUDA_VISIBLE_DEVICES=1 python train_with_coarse.py \
+    --dataset_name 'cifar100small' \
     --setting 'default' \
     --batch_size 128 \
     --grad_from_block 11 \
@@ -25,7 +25,8 @@ CUDA_VISIBLE_DEVICES=0 python train_with_coarse.py \
     --coarse_weight 1.0 \
     --warmup_coarse_weight_epochs 30 \
     --use_coarse_label \
-    --exp_name cifar100_simgcd_default_twohead_clsclustercoarse_weight_1-30_1.0-1.0
+    --warmup_model_dir '/home/czq/workspace/GCD/SimGCD/outputs/simgcd/log/cifar100small_simgcd_default_twohead_clsclustercoarse_weight_1-30_1.0-1.0_(20.12.2023_|_30.949)/checkpoints/model_200.pt' \
+    --exp_name test_cifar100small_simgcd_default_twohead_clsclustercoarse_weight_1-30_1.0-1.0
 
 # CUDA_VISIBLE_DEVICES=3 python train.py \
 #     --dataset_name 'cifar100' \
