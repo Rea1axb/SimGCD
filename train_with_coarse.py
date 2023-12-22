@@ -57,10 +57,19 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
     # best_train_acc_lab = 0
     # best_train_acc_ubl = 0 
     # best_train_acc_all = 0
+    # coarse_weight_schedule = np.concatenate((
+    #     np.linspace(args.warmup_coarse_weight,
+    #                 args.coarse_weight, args.warmup_coarse_weight_epochs),
+    #     np.ones(args.epochs - args.warmup_coarse_weight_epochs) * args.coarse_weight
+    # ))
     coarse_weight_schedule = np.concatenate((
+        np.ones(args.warmup_coarse_weight_start_epoch) * args.warmup_coarse_weight,
         np.linspace(args.warmup_coarse_weight,
-                    args.coarse_weight, args.warmup_coarse_weight_epochs),
-        np.ones(args.epochs - args.warmup_coarse_weight_epochs) * args.coarse_weight
+                    args.coarse_weight, args.warmup_coarse_weight_end_epoch - args.warmup_coarse_weight_start_epoch),
+        np.ones(args.cooloff_coarse_weight_start_epoch - args.warmup_coarse_weight_end_epoch) * args.coarse_weight,
+        np.linspace(args.coarse_weight,
+                    args.cooloff_coarse_weight, args.cooloff_coarse_weight_end_epoch - args.cooloff_coarse_weight_start_epoch),
+        np.ones(args.epochs - args.cooloff_coarse_weight_end_epoch) * args.cooloff_coarse_weight
     ))
 
     for epoch in range(start_epoch, args.epochs):
@@ -352,8 +361,13 @@ if __name__ == "__main__":
 
     parser.add_argument('--fine_weight', type=float, default=1.0, help='Weight of fine-grained loss')
     parser.add_argument('--warmup_coarse_weight', type=float, default=2.0, help='Initial value for coarse_weight')
-    parser.add_argument('--coarse_weight', type=float, default=0.5, help='Final value (after linear warmup) of coarse_weight')
-    parser.add_argument('--warmup_coarse_weight_epochs', type=int, default=50, help='Number of warmup epochs for the coarse_weight')
+    parser.add_argument('--warmup_coarse_weight_start_epoch', type=int, default=20, help='start epoch of linear warmup')
+    parser.add_argument('--warmup_coarse_weight_end_epoch', type=int, default=30, help='end epoch of linear warmup')
+    parser.add_argument('--coarse_weight', type=float, default=0.5, help='value (after linear warmup, before linear cooloff) of coarse_weight')
+    parser.add_argument('--cooloff_coarse_weight_start_epoch', type=int, default=20, help='start epoch of linear cooloff')
+    parser.add_argument('--cooloff_coarse_weight_end_epoch', type=int, default=30, help='end epoch of linear cooloff')
+    parser.add_argument('--cooloff_coarse_weight', type=float, default=2.0, help='Initial value for coarse_weight')
+    
 
     parser.add_argument('--do_test', action='store_true', default=False)
 
