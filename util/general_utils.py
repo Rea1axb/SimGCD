@@ -47,7 +47,7 @@ def init_experiment(args, runner_name=None, exp_id=None):
         now = '{}_({:02d}.{:02d}.{}_|_'.format(args.exp_name, datetime.now().day, datetime.now().month, datetime.now().year) + \
               datetime.now().strftime("%S.%f")[:-3] + ')'
 
-        log_dir = os.path.join(root_dir, 'log', now)
+        log_dir = os.path.join(root_dir, 'log', args.dataset_name, now)
         while os.path.exists(log_dir):
             now = '({:02d}.{:02d}.{}_|_'.format(datetime.now().day, datetime.now().month, datetime.now().year) + \
                   datetime.now().strftime("%S.%f")[:-3] + ')'

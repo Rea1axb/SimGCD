@@ -14,7 +14,7 @@ from data.augmentations import get_transform
 from data.get_datasets import get_datasets, get_class_splits
 
 from util.general_utils import AverageMeter, init_experiment, get_mean_lr
-from util.cluster_and_log_utils import log_accs_from_preds, log_coarse_accs_from_preds, cluster_acc
+from util.cluster_and_log_utils import log_accs_from_preds, log_coarse_accs_from_preds, cluster_acc, log_target2coarse_accs
 from util.ema_utils import EMA
 from config import exp_root, dino_pretrain_path, resnet_pretrain_path
 from model import DINOHead, CoarseHead, TwoHead, info_nce_logits, coarse_info_nce_logits, SupConLoss, CoarseSupConLoss, DistillLoss, TCALoss, ContrastiveLearningViewGenerator, get_params_groups
@@ -178,7 +178,8 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 coarse_loss = args.sup_weight * coarse_sup_con_loss + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
 
                 loss = 0.
-                loss = args.fine_weight * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
+                # loss = args.fine_weight * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
+                loss = (1.0 - coarse_weight_schedule[epoch]) * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
                 
             # Train acc
             _, sup_pred = sup_logits.max(1)
@@ -304,15 +305,17 @@ def test(model, test_loader, epoch, save_name, args):
 
     preds = np.concatenate(preds)
     targets = np.concatenate(targets)
-    all_acc, old_acc, new_acc = log_accs_from_preds(y_true=targets, y_pred=preds, mask=mask,
+    all_acc, old_acc, new_acc, ind, w = log_accs_from_preds(y_true=targets, y_pred=preds, mask=mask,
                                                     T=epoch, eval_funcs=args.eval_funcs, save_name=save_name,
                                                     args=args)
 
     if args.use_coarse_label:
         coarse_preds = np.concatenate(coarse_preds)
         coarse_targets = np.concatenate(coarse_targets)
-        coarse_acc = log_coarse_accs_from_preds(y_true=coarse_targets, y_pred=coarse_preds,
+        coarse_acc, coarse_ind, coarse_w = log_coarse_accs_from_preds(y_true=coarse_targets, y_pred=coarse_preds,
                                             T=epoch, save_name=save_name, args=args)
+        log_target2coarse_accs(preds=preds, ind=ind, coarse_preds=coarse_preds, coarse_ind=coarse_ind, coarse_targets=coarse_targets,
+                               save_name=save_name, T=epoch, args=args)
 
     return all_acc, old_acc, new_acc, coarse_acc
 

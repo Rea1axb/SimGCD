@@ -3,6 +3,7 @@ import torch.distributed as dist
 import numpy as np
 from scipy.optimize import linear_sum_assignment as linear_assignment
 
+from data.data_utils import get_cifar100_coarse_labels
 
 def all_sum_item(item):
     item = torch.tensor(item).cuda()
@@ -35,7 +36,7 @@ def cluster_acc(y_true, y_pred, return_ind=False):
     else:
         return sum([w[i, j] for i, j in ind]) * 1.0 / y_pred.size
 
-def split_cluster_acc_v1(y_true, y_pred, mask):
+def split_cluster_acc_v1(y_true, y_pred, mask, return_ind=False):
 
     """
     Evaluate clustering metrics on two subsets of data, as defined by the mask 'mask'
@@ -57,7 +58,7 @@ def split_cluster_acc_v1(y_true, y_pred, mask):
 
     return total_acc, old_acc, new_acc
 
-def split_cluster_acc_v2(y_true, y_pred, mask):
+def split_cluster_acc_v2(y_true, y_pred, mask, return_ind=False):
     """
     Calculate clustering accuracy. Require scikit-learn installed
     First compute linear assignment on all data, then look at how good the accuracy is on subsets
@@ -123,10 +124,13 @@ def split_cluster_acc_v2(y_true, y_pred, mask):
         pass
     new_acc /= total_new_instances
 
-    return total_acc, old_acc, new_acc
+    if return_ind:
+        return total_acc, old_acc, new_acc, ind, w
+    else:
+        return total_acc, old_acc, new_acc
 
 
-def split_cluster_acc_v2_balanced(y_true, y_pred, mask):
+def split_cluster_acc_v2_balanced(y_true, y_pred, mask, return_ind=False):
     """
     Calculate clustering accuracy. Require scikit-learn installed
     First compute linear assignment on all data, then look at how good the accuracy is on subsets
@@ -213,16 +217,17 @@ def log_accs_from_preds(y_true, y_pred, mask, eval_funcs, save_name, T=None,
     for i, f_name in enumerate(eval_funcs):
 
         acc_f = EVAL_FUNCS[f_name]
-        all_acc, old_acc, new_acc = acc_f(y_true, y_pred, mask)
+        if f_name == 'v2':
+            all_acc, old_acc, new_acc, ind, w = acc_f(y_true, y_pred, mask, return_ind=True)
+            to_return = (all_acc, old_acc, new_acc, ind, w)
+        else:
+            all_acc, old_acc, new_acc = acc_f(y_true, y_pred, mask)
         log_name = f'{save_name}_{f_name}'
 
         if args.writer is not None:
             args.writer.add_scalars(log_name,
                                {'Old': old_acc, 'New': new_acc,
                                 'All': all_acc}, T)
-
-        if i == 0:
-            to_return = (all_acc, old_acc, new_acc)
 
         if print_output:
             print_str = f'Epoch {T}, {log_name}: All {all_acc:.4f} | Old {old_acc:.4f} | New {new_acc:.4f}'
@@ -245,7 +250,8 @@ def log_coarse_accs_from_preds(y_true, y_pred, save_name, T=None,
     """
     y_true = y_true.astype(int)
     y_pred = y_pred.astype(int)
-    coarse_acc = cluster_acc(y_true, y_pred)
+    coarse_acc, ind, w = cluster_acc(y_true, y_pred, return_ind=True)
+    to_return = (coarse_acc, ind, w)
     log_name = f'{save_name}_Coarse'
     if args.writer is not None:
         args.writer.add_scalar(log_name, coarse_acc, T)
@@ -254,4 +260,37 @@ def log_coarse_accs_from_preds(y_true, y_pred, save_name, T=None,
         print(print_str)
         args.logger.info(print_str)
 
-    return coarse_acc
+    return to_return
+
+def log_target2coarse_accs(preds, ind, coarse_preds, coarse_ind, coarse_targets, save_name, T=None,
+                           print_output=True, args=None):
+    preds = preds.astype(int)
+    coarse_preds = coarse_preds.astype(int)
+    coarse_targets = coarse_targets.astype(int)
+    
+    # map pseudo target label to true coarse label: pseudo target label -> true target label -> true coarse label
+    ind_target2coarse_map = {i:get_cifar100_coarse_labels(j) for i, j in ind}
+    target2coarse_preds = np.vectorize(ind_target2coarse_map.get)(preds)
+
+    # map pseudo coarse label to true coarse label: pseudo coarse label -> true coarse label
+    ind_coarse2coarse_map = {i:j for i, j in coarse_ind}
+    coarse2coarse_preds = np.vectorize(ind_coarse2coarse_map.get)(coarse_preds)
+
+    target2coarse_acc = (target2coarse_preds == coarse_targets).mean()
+    coarse2coarse_acc = (coarse2coarse_preds == coarse_targets).mean() # assert equal to 'coarse_acc' returned by func log_coarse_accs_from_preds
+    twohead_coarse_acc = (target2coarse_preds == coarse2coarse_preds).mean()
+
+    log_name = f'{save_name}_Twohead_Coarse'
+    if args.writer is not None:
+        args.writer.add_scalars(log_name, {
+            'T2C_acc': target2coarse_acc,
+            'C2C_acc': coarse2coarse_acc,
+            'Two_acc': twohead_coarse_acc
+        }, T)
+
+    if print_output:
+        print_str = f'Epoch {T}, {log_name}: T2C_acc {target2coarse_acc:.4f} | C2C_acc {coarse2coarse_acc:.4f} | Two_acc {twohead_coarse_acc:.4f}'
+        print(print_str)
+        args.logger.info(print_str)
+
+
