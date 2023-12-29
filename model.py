@@ -220,7 +220,7 @@ class CoarseSupConLoss(torch.nn.Module):
         )
         mask = mask * logits_mask
 
-        # compute mean of log-likelihood over positive
+        # compute mean over positive
         mean_prob_pos = (mask * logits).sum(1) / mask.sum(1)
 
         # loss
@@ -361,8 +361,25 @@ def coarse_info_nce_logits(features, prototypes, coarse_logits, temperature=1.0,
     logits = similarity_matrix / temperature
     return logits, labels
 
+def get_coarse_sup_logits_mean_labels(teacher_coarse_logits, fine_labels, fine_out_dim, device='cuda'):
+    fine_labels = torch.eye(fine_out_dim)[fine_labels].to(device)
+    fine_matrix = torch.matmul(fine_labels, fine_labels.T) # fine_matrix[i, j] == 1 means instance `i` and instance `j` have same label
+    coarse_logits_labels = torch.matmul(fine_matrix, teacher_coarse_logits) / torch.sum(fine_matrix, dim=1, keepdim=True)
+    return coarse_logits_labels
 
+def get_coarse_sup_logits_random_labels(teacher_coarse_logits, fine_labels, fine_out_dim, device='cuda'):
+    fine_labels = torch.eye(fine_out_dim)[fine_labels].to(device)
+    fine_matrix = torch.matmul(fine_labels, fine_labels.T)
+    map_matrix = torch.zeros_like(fine_matrix)
+    indices_with_ones = (fine_matrix == 1).nonzero()
+    for i in range(fine_matrix.size(0)):
+        row_indices = indices_with_ones[indices_with_ones[:, 0] == i, 1]
+        selected_index = torch.randint(0, row_indices.size(0), (1,))
+        map_matrix[i, row_indices[selected_index]] = 1
+    coarse_logits_labels = torch.matmul(map_matrix, teacher_coarse_logits)
+    return coarse_logits_labels
 
+    
 def get_params_groups(model):
     regularized = []
     not_regularized = []
