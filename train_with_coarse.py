@@ -16,8 +16,9 @@ from data.get_datasets import get_datasets, get_class_splits
 from util.general_utils import AverageMeter, init_experiment, get_mean_lr
 from util.cluster_and_log_utils import log_accs_from_preds, log_coarse_accs_from_preds, cluster_acc, log_target2coarse_accs
 from util.ema_utils import EMA
+from util.memory_queue_utils import MemoryQueue
 from config import exp_root, dino_pretrain_path, resnet_pretrain_path
-from model import DINOHead, CoarseHead, TwoHead, info_nce_logits, coarse_info_nce_logits, get_coarse_sup_logits_mean_labels, get_coarse_sup_logits_random_labels, SupConLoss, CoarseSupConLoss, DistillLoss, TCALoss, ContrastiveLearningViewGenerator, get_params_groups
+from model import DINOHead, CoarseHead, TwoHead, info_nce_logits, coarse_info_nce_logits, get_coarse_sup_logits_mean_labels, get_coarse_sup_logits_random_labels, get_coarse_sup_logits_mq_labels, SupConLoss, CoarseSupConLoss, DistillLoss, TCALoss, ContrastiveLearningViewGenerator, get_params_groups
 
 from vit_model import vision_transformer as vits
 from resnet_model import resnet 
@@ -72,6 +73,9 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
         np.ones(args.epochs - args.cooloff_coarse_weight_end_epoch) * args.cooloff_coarse_weight
     ))
 
+    if args.use_memory_queue:
+        memory_queue = MemoryQueue(max_size=args.mq_maxsize, fine_label_num=args.mlp_out_dim, coarse_label_num=args.coarse_out_dim)
+
     for epoch in range(start_epoch, args.epochs):
         loss_record = AverageMeter()
         fine_loss_record = AverageMeter()
@@ -118,7 +122,7 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 cls_loss = nn.CrossEntropyLoss()(sup_logits, sup_labels)
 
                 if args.use_coarse_label:
-                    coarse_sup_labels = torch.cat([class_labels[mask_lab] for _ in range(2)], dim=0)
+                    coarse_sup_labels = torch.cat([coarse_labels[mask_lab] for _ in range(2)], dim=0)
 
                 # clustering, unsup
                 cluster_loss = cluster_criterion(student_out, teacher_out, epoch)
@@ -127,12 +131,36 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 cluster_loss += args.memax_weight * me_max_loss
 
                 # coarse clustering, sup,
-                coarse_sup_logits = torch.cat([f[mask_lab] for f in student_coarse_out.chunk(2)], dim=0)
-                ## coarse sup clustering
+                coarse_sup_logits = torch.cat([f[mask_lab] for f in (student_coarse_out).chunk(2)], dim=0)
+                teacher_sup_logits = torch.cat([f[mask_lab] for f in teacher_out.chunk(2)], dim=0)
                 coarse_teacher_sup_logits = torch.cat([f[mask_lab] for f in teacher_coarse_out.chunk(2)], dim=0)
-                coarse_sup_logits_labels = get_coarse_sup_logits_mean_labels(teacher_coarse_logits=coarse_teacher_sup_logits, fine_labels=sup_labels, fine_out_dim=args.mlp_out_dim)
-                # coarse_sup_logits_labels = get_coarse_sup_logits_random_labels(teacher_coarse_logits=coarse_teacher_sup_logits, fine_labels=sup_labels, fine_out_dim=args.mlp_out_dim)
-                coarse_sup_cls_loss = cluster_criterion(coarse_sup_logits, coarse_sup_logits_labels, epoch)
+                if args.use_memory_queue:
+                    # use memory queue
+                    coarse_sup_cls_loss = torch.tensor(0., requires_grad=True)
+                    if epoch >= args.mq_start_add_epoch:
+                        memory_queue.add(teacher_sup_logits, coarse_teacher_sup_logits)
+                    if epoch >= args.mq_start_query_epoch:
+                        if args.mq_query_mode == 'soft':
+                            mq_labels = memory_queue.soft_query()
+                            coarse_sup_logits_labels = get_coarse_sup_logits_mq_labels(fine_labels=sup_labels, mq_labels=mq_labels)
+                            coarse_sup_cls_loss = cluster_criterion(coarse_sup_logits, coarse_sup_logits_labels, epoch)
+                        elif args.mq_query_mode == 'hard':
+                            mq_labels = memory_queue.hard_query()
+                            coarse_sup_logits_labels = get_coarse_sup_logits_mq_labels(fine_labels=sup_labels, mq_labels=mq_labels)
+                            coarse_sup_cls_loss = nn.CrossEntropyLoss()(coarse_sup_logits, coarse_sup_logits_labels)
+                        else:
+                            raise ValueError(f'The options of args.mq_query_mode is [`soft`, `hard`], but find {args.mq_query_mode}')
+                else:
+                    # NOTE: mean
+                    coarse_sup_logits_labels = get_coarse_sup_logits_mean_labels(teacher_coarse_logits=coarse_teacher_sup_logits, fine_labels=sup_labels, fine_out_dim=args.mlp_out_dim)
+                    # NOTE: random
+                    # coarse_sup_logits_labels = get_coarse_sup_logits_random_labels(teacher_coarse_logits=coarse_teacher_sup_logits, fine_labels=sup_labels, fine_out_dim=args.mlp_out_dim)
+
+                    # NOTE: soft loss
+                    coarse_sup_cls_loss = cluster_criterion(coarse_sup_logits, coarse_sup_logits_labels, epoch)
+                    # NOTE: hard loss
+                    # _, coarse_sup_logits_labels = coarse_sup_logits_labels.max(1)
+                    # coarse_sup_cls_loss = nn.CrossEntropyLoss()(coarse_sup_logits, coarse_sup_logits_labels)
                 ## tca
                 coarse_cls_loss = TCALoss()(coarse_logits=coarse_sup_logits, fine_labels=sup_labels, coarse_prototypes=coarse_prototypes, fine_prototypes=fine_prototypes)
 
@@ -176,17 +204,19 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 fine_loss = 0.
                 fine_loss = args.sup_weight * (cls_loss + sup_con_loss) + (1 - args.sup_weight) * (cluster_loss + contrastive_loss)
                 coarse_loss = 0.
-                # NOTE: ClsClusterContrastiveSupcontrastiveCoarse
+                # NOTE: ClsClusterContrastiveSupcontrastive
                 # coarse_loss = args.sup_weight * (coarse_cls_loss + coarse_sup_con_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
                 # NOTE: ClusterContrastive
-                # coarse_loss = coarse_cluster_loss + coarse_contrastive_loss
+                # coarse_loss = (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
                 # NOTE: Cluster
                 # coarse_loss = coarse_cluster_loss
                 # NOTE: ClsCluster
                 # coarse_loss = args.sup_weight * coarse_cls_loss + (1 - args.sup_weight) * coarse_cluster_loss
                 # NOTE: ClusterContrastiveSupcontrastiveCoarse
                 # coarse_loss = args.sup_weight * coarse_sup_con_loss + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
-                # NOTE: SupclsClusterContrastiveSupcontrastiveCoarse
+                # NOTE: SupclsClusterContrastive
+                # coarse_loss = args.sup_weight * coarse_sup_cls_loss + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
+                # NOTE: SupclsClusterContrastiveSupcontrastive
                 coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
 
                 loss = 0.
@@ -379,6 +409,12 @@ if __name__ == "__main__":
     parser.add_argument('--use_ema', action='store_true', default=False)
     parser.add_argument('--momentum_ema', type=float, default=0.999)
     parser.add_argument('--interval_ema', type=int, default=1, help='ema update interval')
+
+    parser.add_argument('--use_memory_queue', action='store_true', default=False)
+    parser.add_argument('--mq_start_add_epoch', type=int, default=30, help='start epoch of adding data to memory queue')
+    parser.add_argument('--mq_start_query_epoch', type=int, default=40, help='start epoch of quering data from memory queue')
+    parser.add_argument('--mq_query_mode', type=str, default='soft', help='options: soft, hard')
+    parser.add_argument('--mq_maxsize', type=int, default=1024, help='max size of memory queue')
 
     parser.add_argument('--fine_weight', type=float, default=1.0, help='Weight of fine-grained loss')
     parser.add_argument('--warmup_coarse_weight', type=float, default=2.0, help='Initial value for coarse_weight')

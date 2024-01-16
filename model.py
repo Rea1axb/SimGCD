@@ -379,6 +379,9 @@ def get_coarse_sup_logits_random_labels(teacher_coarse_logits, fine_labels, fine
     coarse_logits_labels = torch.matmul(map_matrix, teacher_coarse_logits)
     return coarse_logits_labels
 
+def get_coarse_sup_logits_mq_labels(fine_labels, mq_labels, device='cuda'):
+    coarse_logits_labels = mq_labels[fine_labels].to(device)
+    return coarse_logits_labels
     
 def get_params_groups(model):
     regularized = []
