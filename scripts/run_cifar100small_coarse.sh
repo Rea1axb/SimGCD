@@ -34,7 +34,8 @@ CUDA_VISIBLE_DEVICES=3 python train_with_coarse.py \
     --mq_start_query_epoch 10 \
     --mq_query_mode 'soft' \
     --mq_maxsize 1024 \
-    --exp_name 'cifar100small_default_twohead(Superclsmqsoftcoarseno0.1ClusterContrastiveSupcontrastiveCoarse)_weight(warmup_30-60_0.0-0.5_cooloff_120-150_0.5-0.2)_fineweight(dynamic)_batchsz(256)_SEED4'
+    --use_prototypes_attention \
+    --exp_name 'cifar100small_default_twohead(GtclsSupclsClusterContrastiveattentionSupcontrastiveCoarse)_weight(warmup_30-60_0.0-0.5_cooloff_120-150_0.5-0.2)_fineweight(dynamic)_batchsz(256)'
 
 # CUDA_VISIBLE_DEVICES=3 python train.py \
 #     --dataset_name 'cifar100' \

@@ -86,6 +86,7 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
         contrastive_loss_record = AverageMeter()
 
         coarse_cls_loss_record = AverageMeter()
+        coarse_gt_cls_loss_record = AverageMeter()
         coarse_sup_cls_loss_record = AverageMeter()
         coarse_cluster_loss_record = AverageMeter()
         coarse_sup_con_loss_record = AverageMeter()
@@ -113,7 +114,10 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 teacher_out = student_out.detach()
                 teacher_coarse_out = student_coarse_out.detach()
 
-                coarse_prototypes = student.projector.get_coarse_prototypes()
+                if args.use_prototypes_attention:
+                    coarse_prototypes = student.projector.get_coarse_prototypes_with_attention()
+                else:
+                    coarse_prototypes = student.projector.get_coarse_prototypes()
                 fine_prototypes = student.projector.get_fine_prototypes()
 
                 # clustering, sup
@@ -134,6 +138,9 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 coarse_sup_logits = torch.cat([f[mask_lab] for f in (student_coarse_out).chunk(2)], dim=0)
                 teacher_sup_logits = torch.cat([f[mask_lab] for f in teacher_out.chunk(2)], dim=0)
                 coarse_teacher_sup_logits = torch.cat([f[mask_lab] for f in teacher_coarse_out.chunk(2)], dim=0)
+
+                coarse_gt_cls_loss = nn.CrossEntropyLoss()(coarse_sup_logits / 0.1, coarse_sup_labels)
+
                 if args.use_memory_queue:
                     # use memory queue
                     coarse_sup_cls_loss = torch.tensor(0., requires_grad=True)
@@ -197,6 +204,7 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 pstr += f'contrastive_loss: {contrastive_loss.item():.4f} '
                 pstr += f'coarse_cls_loss: {coarse_cls_loss.item():.4f} '
                 pstr += f'coarse_sup_cls_loss: {coarse_sup_cls_loss.item():.4f} '
+                pstr += f'coarse_gt_cls_loss: {coarse_gt_cls_loss.item():.4f} '
                 pstr += f'coarse_cluster_loss: {coarse_cluster_loss.item():.4f} '
                 pstr += f'coarse_sup_con_loss: {coarse_sup_con_loss.item():.4f} '
                 pstr += f'coarse_contrastive_loss: {coarse_contrastive_loss.item():.4f} '
@@ -217,7 +225,11 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 # NOTE: SupclsClusterContrastive
                 # coarse_loss = args.sup_weight * coarse_sup_cls_loss + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
                 # NOTE: SupclsClusterContrastiveSupcontrastive
-                coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
+                # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
+                # NOTE: GtclsClusterContrastiveSupcontrastive
+                # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_gt_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
+                # NOTE: GtclsSupclsClusterContrastiveSupcontrastive
+                coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_gt_cls_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
 
                 loss = 0.
                 # loss = args.fine_weight * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
@@ -244,6 +256,7 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
             
             coarse_cls_loss_record.update(coarse_cls_loss.item(), class_labels.size(0))
             coarse_sup_cls_loss_record.update(coarse_sup_cls_loss.item(), class_labels.size(0))
+            coarse_gt_cls_loss_record.update(coarse_gt_cls_loss.item(), class_labels.size(0))
             coarse_cluster_loss_record.update(coarse_cluster_loss.item(), class_labels.size(0))
             coarse_sup_con_loss_record.update(coarse_sup_con_loss.item(), class_labels.size(0))
             coarse_contrastive_loss_record.update(coarse_contrastive_loss.item(), class_labels.size(0))
@@ -286,6 +299,7 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
         args.writer.add_scalar('contrastive loss', contrastive_loss_record.avg, epoch)
         args.writer.add_scalar('coarse cls loss', coarse_cls_loss_record.avg, epoch)
         args.writer.add_scalar('coarse sup cls loss', coarse_sup_cls_loss_record.avg, epoch)
+        args.writer.add_scalar('coarse gt cls loss', coarse_gt_cls_loss_record.avg, epoch)
         args.writer.add_scalar('coarse cluster loss', coarse_cluster_loss_record.avg, epoch)
         args.writer.add_scalar('coarse sup con loss', coarse_sup_con_loss_record.avg, epoch)
         args.writer.add_scalar('coarse contrastive loss', coarse_contrastive_loss_record.avg, epoch)
@@ -415,6 +429,8 @@ if __name__ == "__main__":
     parser.add_argument('--mq_start_query_epoch', type=int, default=40, help='start epoch of quering data from memory queue')
     parser.add_argument('--mq_query_mode', type=str, default='soft', help='options: soft, hard')
     parser.add_argument('--mq_maxsize', type=int, default=1024, help='max size of memory queue')
+
+    parser.add_argument('--use_prototypes_attention', action='store_true', default=False)
 
     parser.add_argument('--fine_weight', type=float, default=1.0, help='Weight of fine-grained loss')
     parser.add_argument('--warmup_coarse_weight', type=float, default=2.0, help='Initial value for coarse_weight')

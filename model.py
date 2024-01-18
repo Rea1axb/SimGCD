@@ -41,9 +41,60 @@ class DINOHead(nn.Module):
         logits = self.last_layer(x)
         return x_proj, logits
 
+class MultiheadAttention(nn.Module):
+    def __init__(self, hid_dim, n_heads, attn_drop=0., proj_drop=0.):
+        super(MultiheadAttention, self).__init__()
+        self.hid_dim = hid_dim
+        self.n_heads = n_heads
+
+        assert hid_dim % n_heads == 0
+
+        self.w_q = nn.Linear(hid_dim, hid_dim)
+        self.w_k = nn.Linear(hid_dim, hid_dim)
+        self.w_v = nn.Linear(hid_dim, hid_dim)
+        self.attn_drop = nn.Dropout(attn_drop)
+
+        self.fc = nn.Linear(hid_dim, hid_dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+        self.scale = (hid_dim // n_heads) ** -0.5
+
+
+    def forward(self, query, key, value, mask=None):
+        # query: (batch_size, q_cnt, hid_dim)
+        # key: (batch_size, k_cnt, hid_dim)
+        # value: (batch_size, v_cnt, hid_dim), k_cnt == v_cnt
+        bsz = query.shape[0]
+        Q = self.w_q(query) # (batch_size, q_cnt, hid_dim)
+        K = self.w_k(key) # (batch_size, k_cnt, hid_dim)
+        V = self.w_v(value) # (batch_size, v_cnt, hid_dim)
+
+        Q = Q.view(bsz, -1, self.n_heads, self.hid_dim //
+                   self.n_heads).permute(0, 2, 1, 3) # (batch_size, n_head, q_cnt, head_dim)
+        K = K.view(bsz, -1, self.n_heads, self.hid_dim //
+                   self.n_heads).permute(0, 2, 1, 3) # (batch_size, n_head, k_cnt, head_dim)
+        V = V.view(bsz, -1, self.n_heads, self.hid_dim //
+                   self.n_heads).permute(0, 2, 1, 3) # (batch_size, n_head, v_cnt, head_dim)
+
+        attention = torch.matmul(Q, K.permute(0, 1, 3, 2)) * self.scale # (batch_size, n_head, q_cnt, k_cnt)
+
+        if mask is not None:
+            attention = attention.masked_fill(mask == 0, -1e10)
+
+        attention = self.attn_drop(torch.softmax(attention, dim=-1))
+
+        x = torch.matmul(attention, V) # (batch_size, n_head, q_cnt, head_dim)
+
+        x = x.permute(0, 2, 1, 3).contiguous() # (batch_size, q_cnt, n_head, head_dim)
+
+        x = x.view(bsz, -1, self.n_heads * (self.hid_dim // self.n_heads)) # (batch_size, q_cnt, hid_dim)
+        x = self.fc(x)
+        x = self.proj_drop(x)
+        return x
+
 class TwoHead(nn.Module):
     def __init__(self, in_dim, out_dim_fine, out_dim_coarse, use_bn=False, norm_last_layer=True,
-                 mlp_nlayers=3, hidden_dim=2048, bottleneck_dim=256):
+                 mlp_nlayers=3, hidden_dim=2048, bottleneck_dim=256, attn_head=6):
         super(TwoHead, self).__init__()
         nlayers = max(mlp_nlayers, 1)
         if nlayers == 1:
@@ -66,6 +117,7 @@ class TwoHead(nn.Module):
             nn.GELU(),
             nn.Linear(hidden_dim, in_dim)
         )
+        self.attn = MultiheadAttention(hid_dim=in_dim, n_heads=attn_head)
         self.apply(self._init_weights)
         self.fine_last_layer = nn.utils.weight_norm(nn.Linear(in_dim, out_dim_fine, bias=False))
         self.coarse_last_layer = nn.utils.weight_norm(nn.Linear(in_dim, out_dim_coarse, bias=False))
@@ -100,6 +152,18 @@ class TwoHead(nn.Module):
             coarse_weight = self.mlp(coarse_weight)
         return coarse_weight
     
+    def get_coarse_prototypes_with_attention(self, proj=True):
+        coarse_weight = self.coarse_last_layer.weight
+        coarse_weight = coarse_weight.unsqueeze(0)
+        fine_weight = self.fine_last_layer.weight
+        fine_weight = fine_weight.unsqueeze(0)
+        coarse_prototypes = self.attn(coarse_weight, fine_weight, fine_weight)
+        coarse_prototypes = coarse_prototypes.squeeze(0)
+        if proj:
+            coarse_prototypes = self.mlp(coarse_prototypes)
+        return coarse_prototypes
+
+
     def get_fine_prototypes(self, proj=True):
         fine_weight = self.fine_last_layer.weight
         if proj:
