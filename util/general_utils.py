@@ -29,6 +29,7 @@ class AverageMeter(object):
 
 
 def init_experiment(args, runner_name=None, exp_id=None):
+    assert args.save_freq % args.eval_freq == 0, 'args.save_freq mod args.eval_freq != 0'
     # Get filepath of calling script
     if runner_name is None:
         runner_name = os.path.dirname(os.path.abspath(inspect.getfile(inspect.currentframe()))).split(".")[-2:]
@@ -94,6 +95,14 @@ def init_experiment(args, runner_name=None, exp_id=None):
 
 def get_mean_lr(optimizer):
     return torch.mean(torch.Tensor([param_group['lr'] for param_group in optimizer.param_groups])).item()
+
+def str2bool(v):
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise ValueError('Boolean value expected.')
 
 class DistributedWeightedSampler(torch.utils.data.distributed.DistributedSampler):
 

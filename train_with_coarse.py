@@ -13,7 +13,7 @@ from tqdm import tqdm
 from data.augmentations import get_transform
 from data.get_datasets import get_datasets, get_class_splits
 
-from util.general_utils import AverageMeter, init_experiment, get_mean_lr
+from util.general_utils import AverageMeter, init_experiment, get_mean_lr, str2bool
 from util.cluster_and_log_utils import log_accs_from_preds, log_coarse_accs_from_preds, cluster_acc, log_target2coarse_accs
 from util.ema_utils import EMA
 from util.memory_queue_utils import MemoryQueue
@@ -225,11 +225,11 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 # NOTE: SupclsClusterContrastive
                 # coarse_loss = args.sup_weight * coarse_sup_cls_loss + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
                 # NOTE: SupclsClusterContrastiveSupcontrastive
-                # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
+                coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
                 # NOTE: GtclsClusterContrastiveSupcontrastive
                 # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_gt_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
                 # NOTE: GtclsSupclsClusterContrastiveSupcontrastive
-                coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_gt_cls_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
+                # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_gt_cls_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
 
                 loss = 0.
                 # loss = args.fine_weight * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
@@ -278,9 +278,9 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
 
         if (epoch + 1) % args.eval_freq == 0:
             args.logger.info('Testing on unlabelled examples in the training data...')
-            all_acc, old_acc, new_acc, coarse_acc = test(student, unlabelled_train_loader, epoch=epoch, save_name='Train ACC Unlabelled', args=args)
+            all_acc, old_acc, new_acc, coarse_acc, ind, w, coarse_ind, coarse_w = test(student, unlabelled_train_loader, epoch=epoch, save_name='Train ACC Unlabelled', args=args)
             args.logger.info('Testing on disjoint test set...')
-            all_acc_test, old_acc_test, new_acc_test, coarse_acc_test = test(student, test_loader, epoch=epoch, save_name='Test ACC', args=args)
+            all_acc_test, old_acc_test, new_acc_test, coarse_acc_test, ind_test, w_test, coarse_ind_test, coarse_w_test = test(student, test_loader, epoch=epoch, save_name='Test ACC', args=args)
             args.logger.info('Train Accuracies: All {:.4f} | Old {:.4f} | New {:.4f}'.format(all_acc, old_acc, new_acc))
             args.logger.info('Test Accuracies: All {:.4f} | Old {:.4f} | New {:.4f}'.format(all_acc_test, old_acc_test, new_acc_test))
             if args.use_coarse_label:
@@ -314,6 +314,14 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 'optimizer': optimizer.state_dict(),
                 'scheduler': exp_lr_scheduler.state_dict(),
                 'epoch': epoch + 1,
+                'ind': ind,
+                'w': w,
+                'coarse_ind': coarse_ind,
+                'coarse_w': coarse_w,
+                'ind_test': ind_test,
+                'w_test': w_test,
+                'coarse_ind_test': coarse_ind_test,
+                'coarse_w_test': coarse_w_test
             }
             save_path = os.path.join(args.model_dir, f'model_{epoch + 1}.pt')
             torch.save(save_dict, save_path)
@@ -379,7 +387,7 @@ def test(model, test_loader, epoch, save_name, args):
         log_target2coarse_accs(preds=preds, ind=ind, coarse_preds=coarse_preds, coarse_ind=coarse_ind, coarse_targets=coarse_targets,
                                save_name=save_name, T=epoch, args=args)
 
-    return all_acc, old_acc, new_acc, coarse_acc
+    return all_acc, old_acc, new_acc, coarse_acc, ind, w, coarse_ind, coarse_w
 
 if __name__ == "__main__":
 
@@ -410,27 +418,27 @@ if __name__ == "__main__":
     parser.add_argument('--teacher_temp', default=0.04, type=float, help='Final value (after linear warmup)of the teacher temperature.')
     parser.add_argument('--warmup_teacher_temp_epochs', default=30, type=int, help='Number of warmup epochs for the teacher temperature.')
 
-    parser.add_argument('--fp16', action='store_true', default=False)
+    parser.add_argument('--fp16', type=str2bool, default=False)
     parser.add_argument('--print_freq', default=10, type=int)
     parser.add_argument('--exp_name', default=None, type=str)
     parser.add_argument('--setting', type=str, default='default', help='dataset setting')
     parser.add_argument('--eval_freq', type=int, default=10, help='eval frequency when training')
     parser.add_argument('--save_freq', type=int, default=50, help='save frequency of model when training')
 
-    parser.add_argument('--use_coarse_label', action='store_true', default=False)
+    parser.add_argument('--use_coarse_label', type=str2bool, default=False)
     parser.add_argument('--sup_coarse_con_weight', type=float, default=0.5)
 
-    parser.add_argument('--use_ema', action='store_true', default=False)
+    parser.add_argument('--use_ema', type=str2bool, default=False)
     parser.add_argument('--momentum_ema', type=float, default=0.999)
     parser.add_argument('--interval_ema', type=int, default=1, help='ema update interval')
 
-    parser.add_argument('--use_memory_queue', action='store_true', default=False)
+    parser.add_argument('--use_memory_queue', type=str2bool, default=False)
     parser.add_argument('--mq_start_add_epoch', type=int, default=30, help='start epoch of adding data to memory queue')
     parser.add_argument('--mq_start_query_epoch', type=int, default=40, help='start epoch of quering data from memory queue')
     parser.add_argument('--mq_query_mode', type=str, default='soft', help='options: soft, hard')
     parser.add_argument('--mq_maxsize', type=int, default=1024, help='max size of memory queue')
 
-    parser.add_argument('--use_prototypes_attention', action='store_true', default=False)
+    parser.add_argument('--use_prototypes_attention', type=str2bool, default=False)
 
     parser.add_argument('--fine_weight', type=float, default=1.0, help='Weight of fine-grained loss')
     parser.add_argument('--warmup_coarse_weight', type=float, default=2.0, help='Initial value for coarse_weight')
@@ -442,7 +450,7 @@ if __name__ == "__main__":
     parser.add_argument('--cooloff_coarse_weight', type=float, default=2.0, help='Initial value for coarse_weight')
     
 
-    parser.add_argument('--do_test', action='store_true', default=False)
+    parser.add_argument('--do_test', type=str2bool, default=False)
 
     # ----------------------
     # INIT
@@ -557,5 +565,18 @@ if __name__ == "__main__":
     if args.do_test:
         if args.warmup_model_dir is None:
             raise ValueError('args.warmup_model_dir is None')
-        test(model, test_loader_unlabelled, epoch=None, save_name='Train ACC Unlabelled', args=args)
-        test(model, test_loader_labelled, epoch=None, save_name='Test ACC', args=args)
+        _, __, ___, ____, ind, w, coarse_ind, coarse_w = test(model, test_loader_unlabelled, epoch=None, save_name='Train ACC Unlabelled', args=args)
+        _, __, ___, ____, ind_test, w_test, coarse_ind_test, coarse_w_test = test(model, test_loader_labelled, epoch=None, save_name='Test ACC', args=args)
+        save_dict = {
+            'ind': ind,
+            'w': w,
+            'coarse_ind': coarse_ind,
+            'coarse_w': coarse_w,
+            'ind_test': ind_test,
+            'w_test': w_test,
+            'coarse_ind_test': coarse_ind_test,
+            'coarse_w_test': coarse_w_test
+        }
+        save_path = os.path.join(args.model_dir, f'ind_w.pt')
+        torch.save(save_dict, save_path)
+        args.logger.info("ind and w saved to {}.".format(save_path))
