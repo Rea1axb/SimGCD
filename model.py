@@ -68,6 +68,9 @@ class MultiheadAttention(nn.Module):
         Q = self.w_q(query) # (batch_size, q_cnt, hid_dim)
         K = self.w_k(key) # (batch_size, k_cnt, hid_dim)
         V = self.w_v(value) # (batch_size, v_cnt, hid_dim)
+        # Q = query
+        # K = key
+        # V = value
 
         Q = Q.view(bsz, -1, self.n_heads, self.hid_dim //
                    self.n_heads).permute(0, 2, 1, 3) # (batch_size, n_head, q_cnt, head_dim)
@@ -90,7 +93,7 @@ class MultiheadAttention(nn.Module):
         x = x.view(bsz, -1, self.n_heads * (self.hid_dim // self.n_heads)) # (batch_size, q_cnt, hid_dim)
         x = self.fc(x)
         x = self.proj_drop(x)
-        return x
+        return x, attention
 
 class TwoHead(nn.Module):
     def __init__(self, in_dim, out_dim_fine, out_dim_coarse, use_bn=False, norm_last_layer=True,
@@ -145,24 +148,26 @@ class TwoHead(nn.Module):
         coarse_logits = self.coarse_last_layer(x)
         return x, x_pred, x_proj, fine_logits, coarse_logits
     
+    def get_coarse_prototypes_with_attention(self, proj=True, return_att_weight=False):
+        coarse_weight = self.coarse_last_layer.weight
+        coarse_weight = coarse_weight.unsqueeze(0)
+        fine_weight = self.fine_last_layer.weight
+        fine_weight = fine_weight.unsqueeze(0)
+        coarse_prototypes, att_weight = self.attn(coarse_weight, fine_weight, fine_weight)
+        coarse_prototypes = coarse_prototypes.squeeze(0)
+        att_weight = att_weight.squeeze(0)
+        if proj:
+            coarse_prototypes = self.mlp(coarse_prototypes)
+        if return_att_weight:
+            return coarse_prototypes, att_weight
+        return coarse_prototypes
+    
     # NOTE: in pytorch 1.12, The weight is recomputed once at module forward, so use the following two functions after module forward
     def get_coarse_prototypes(self, proj=True):
         coarse_weight = self.coarse_last_layer.weight
         if proj:
             coarse_weight = self.mlp(coarse_weight)
         return coarse_weight
-    
-    def get_coarse_prototypes_with_attention(self, proj=True):
-        coarse_weight = self.coarse_last_layer.weight
-        coarse_weight = coarse_weight.unsqueeze(0)
-        fine_weight = self.fine_last_layer.weight
-        fine_weight = fine_weight.unsqueeze(0)
-        coarse_prototypes = self.attn(coarse_weight, fine_weight, fine_weight)
-        coarse_prototypes = coarse_prototypes.squeeze(0)
-        if proj:
-            coarse_prototypes = self.mlp(coarse_prototypes)
-        return coarse_prototypes
-
 
     def get_fine_prototypes(self, proj=True):
         fine_weight = self.fine_last_layer.weight
