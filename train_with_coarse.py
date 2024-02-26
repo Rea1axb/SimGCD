@@ -18,7 +18,7 @@ from util.cluster_and_log_utils import log_accs_from_preds, log_coarse_accs_from
 from util.ema_utils import EMA
 from util.memory_queue_utils import MemoryQueue
 from config import exp_root, dino_pretrain_path, resnet_pretrain_path
-from model import DINOHead, CoarseHead, TwoHead, info_nce_logits, coarse_info_nce_logits, get_coarse_sup_logits_mean_labels, get_coarse_sup_logits_random_labels, get_coarse_sup_logits_mq_labels, SupConLoss, CoarseSupConLoss, DistillLoss, TCALoss, ContrastiveLearningViewGenerator, get_params_groups
+from model import DINOHead, CoarseHead, TwoHead, CoarseFromFineHead, info_nce_logits, coarse_info_nce_logits, get_coarse_sup_logits_mean_labels, get_coarse_sup_logits_random_labels, get_coarse_sup_logits_mq_labels, SupConLoss, CoarseSupConLoss, DistillLoss, TCALoss, ContrastiveLearningViewGenerator, get_params_groups
 
 from vit_model import vision_transformer as vits
 from resnet_model import resnet 
@@ -225,11 +225,11 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 # NOTE: SupclsClusterContrastive
                 # coarse_loss = args.sup_weight * coarse_sup_cls_loss + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
                 # NOTE: SupclsClusterContrastiveSupcontrastive
-                coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
+                # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
                 # NOTE: GtclsClusterContrastiveSupcontrastive
                 # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_gt_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
                 # NOTE: GtclsSupclsClusterContrastiveSupcontrastive
-                # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_gt_cls_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
+                coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_gt_cls_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
 
                 loss = 0.
                 # loss = args.fine_weight * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
@@ -550,7 +550,8 @@ if __name__ == "__main__":
     # ----------------------
     # projector = DINOHead(in_dim=args.feat_dim, out_dim=args.mlp_out_dim, nlayers=args.num_mlp_layers)
     # projector = CoarseHead(dino_in_dim=args.feat_dim, dino_out_dim=args.mlp_out_dim, dino_nlayers=args.num_mlp_layers)
-    projector = TwoHead(in_dim=args.feat_dim, out_dim_fine=args.mlp_out_dim, out_dim_coarse=args.coarse_out_dim, mlp_nlayers=args.num_mlp_layers)
+    # projector = TwoHead(in_dim=args.feat_dim, out_dim_fine=args.mlp_out_dim, out_dim_coarse=args.coarse_out_dim, mlp_nlayers=args.num_mlp_layers)
+    projector = CoarseFromFineHead(in_dim=args.feat_dim, out_dim_fine=args.mlp_out_dim, out_dim_coarse=args.coarse_out_dim, mlp_nlayers=args.num_mlp_layers)
     # model = nn.Sequential(backbone, projector).to(device)
     model = nn.Sequential(OrderedDict([
         ('backbone', backbone),

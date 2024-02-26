@@ -95,6 +95,90 @@ class MultiheadAttention(nn.Module):
         x = self.proj_drop(x)
         return x, attention
 
+
+class CoarseFromFineHead(nn.Module):
+    def __init__(self, in_dim, out_dim_fine, out_dim_coarse, use_bn=False, norm_last_layer=True,
+                 mlp_nlayers=3, hidden_dim=2048, bottleneck_dim=256, attn_head=1):
+        super(CoarseFromFineHead, self).__init__()
+        nlayers = max(mlp_nlayers, 1)
+        if nlayers == 1:
+            self.mlp = nn.Linear(in_dim, bottleneck_dim)
+        elif nlayers != 0:
+            layers = [nn.Linear(in_dim, hidden_dim)]
+            if use_bn:
+                layers.append(nn.BatchNorm1d(hidden_dim))
+            layers.append(nn.GELU())
+            for _ in range(nlayers - 2):
+                layers.append(nn.Linear(hidden_dim, hidden_dim))
+                if use_bn:
+                    layers.append(nn.BatchNorm1d(hidden_dim))
+                layers.append(nn.GELU())
+            layers.append(nn.Linear(hidden_dim, bottleneck_dim))
+            self.mlp = nn.Sequential(*layers)
+        self.predictor = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, in_dim)
+        )
+        # self.attn = MultiheadAttention(hid_dim=in_dim, n_heads=attn_head)
+        self.coarse_last_layer = nn.Linear(out_dim_fine, out_dim_coarse, bias=False)
+        # self.coarse_query_layer = nn.Linear(in_dim, out_dim_coarse, bias=False)
+        self.apply(self._init_weights)
+        self.fine_last_layer = nn.utils.weight_norm(nn.Linear(in_dim, out_dim_fine, bias=False))
+        self.fine_last_layer.weight_g.data.fill_(1)
+        if norm_last_layer:
+            self.fine_last_layer.weight_g.requires_grad = False
+        
+    
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+    
+    def forward(self, x):
+        x_proj = self.mlp(x)
+        x_pred = self.predictor(x)
+        x = nn.functional.normalize(x, dim=-1, p=2)
+        x_pred = nn.functional.normalize(x_pred, dim=-1, p=2)
+        # x = x.detach()
+        fine_logits = self.fine_last_layer(x)
+        # coarse_prototypes = self.get_coarse_prototypes_with_attention(proj=False)
+        coarse_prototypes = self.get_coarse_prototypes(proj=False)
+        coarse_prototypes = nn.functional.normalize(coarse_prototypes, dim=-1, p=2)
+        coarse_logits = torch.matmul(x, coarse_prototypes.T)
+        return x, x_pred, x_proj, fine_logits, coarse_logits
+    
+    # def get_coarse_prototypes_with_attention(self, proj=True, return_att_weight=False):
+    #     coarse_weight = self.coarse_query_layer.weight
+    #     coarse_weight = coarse_weight.unsqueeze(0)
+    #     fine_weight = self.fine_last_layer.weight
+    #     fine_weight = fine_weight.unsqueeze(0)
+    #     coarse_prototypes, att_weight = self.attn(coarse_weight, fine_weight, fine_weight)
+    #     coarse_prototypes = coarse_prototypes.squeeze(0)
+    #     att_weight = att_weight.squeeze(0)
+    #     if proj:
+    #         coarse_prototypes = self.mlp(coarse_prototypes)
+    #     if return_att_weight:
+    #         return coarse_prototypes, att_weight
+    #     return coarse_prototypes
+    
+    # NOTE: in pytorch 1.12, The weight is recomputed once at module forward, so use the following functions after module forward
+    def get_coarse_prototypes(self, proj=True):
+        fine_weight = self.fine_last_layer.weight
+        coarse_weight = self.coarse_last_layer(fine_weight.T).T
+        if proj:
+            coarse_weight = self.mlp(coarse_weight)
+        return coarse_weight
+    
+    def get_fine_prototypes(self, proj=True):
+        fine_weight = self.fine_last_layer.weight
+        if proj:
+            fine_weight = self.mlp(fine_weight)
+        return fine_weight
+
+
 class TwoHead(nn.Module):
     def __init__(self, in_dim, out_dim_fine, out_dim_coarse, use_bn=False, norm_last_layer=True,
                  mlp_nlayers=3, hidden_dim=2048, bottleneck_dim=256, attn_head=6):
