@@ -146,7 +146,6 @@ class CoarseFromFineHead(nn.Module):
         fine_logits = self.fine_last_layer(x)
         # coarse_prototypes = self.get_coarse_prototypes_with_attention(proj=False)
         coarse_prototypes = self.get_coarse_prototypes(proj=False)
-        coarse_prototypes = nn.functional.normalize(coarse_prototypes, dim=-1, p=2)
         coarse_logits = torch.matmul(x, coarse_prototypes.T)
         return x, x_pred, x_proj, fine_logits, coarse_logits
     
@@ -170,12 +169,14 @@ class CoarseFromFineHead(nn.Module):
         coarse_weight = self.coarse_last_layer(fine_weight.T).T
         if proj:
             coarse_weight = self.mlp(coarse_weight)
+        coarse_weight = nn.functional.normalize(coarse_weight, dim=-1, p=2)
         return coarse_weight
     
     def get_fine_prototypes(self, proj=True):
         fine_weight = self.fine_last_layer.weight
         if proj:
             fine_weight = self.mlp(fine_weight)
+        fine_weight = nn.functional.normalize(fine_weight, dim=-1, p=2)
         return fine_weight
 
 
@@ -599,6 +600,19 @@ class TCALoss(nn.Module):
         loss = nn.CrossEntropyLoss()(fine_logits, fine_labels)
         return loss
         
+class PrototypesLoss(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+
+    def forward(self, prototypes, device='cuda'):
+        similarity_matrix = torch.matmul(prototypes, prototypes.T)
+        similarity_matrix = similarity_matrix + 1.0
+        # similarity_max, _ = torch.max(similarity_matrix, dim=-1, keepdim=True)
+        # similarity_matrix = similarity_matrix - similarity_max.detach()
+        mask = torch.eye(prototypes.shape[0], dtype=torch.bool)
+        mask = (~mask).float().to(device)
+        loss = torch.sum(similarity_matrix * mask) / mask.sum()
+        return loss
 
 
 if __name__ == "__main__":
