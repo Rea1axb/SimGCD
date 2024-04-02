@@ -14,7 +14,7 @@ class CarsDataset(Dataset):
     """
         Cars Dataset
     """
-    def __init__(self, train=True, limit=0, data_dir=car_root, transform=None):
+    def __init__(self, train=True, limit=0, data_dir=car_root, transform=None, use_coarse_label=False):
 
         metas = os.path.join(data_dir, 'devkit/cars_train_annos.mat') if train else os.path.join(data_dir, 'cars_test_annos_withlabels.mat')
         data_dir = os.path.join(data_dir, 'cars_train/') if train else os.path.join(data_dir, 'cars_test/')
@@ -26,6 +26,7 @@ class CarsDataset(Dataset):
         self.train = train
 
         self.transform = transform
+        self.use_coarse_label = use_coarse_label
 
         if not isinstance(metas, str):
             raise Exception("Train metas must be string location !")
@@ -56,8 +57,11 @@ class CarsDataset(Dataset):
             target = self.target_transform(target)
 
         idx = self.uq_idxs[idx]
-
-        return image, target, idx
+        coarse_label = 0
+        if self.use_coarse_label:
+            return image, target, coarse_label, idx
+        else:
+            return image, target, idx
 
     def __len__(self):
         return len(self.data)
@@ -108,12 +112,12 @@ def get_train_val_indices(train_dataset, val_split=0.2):
 
 
 def get_scars_datasets(train_transform, test_transform, train_classes=range(160), prop_train_labels=0.8,
-                    split_train_val=False, seed=0):
+                    split_train_val=False, seed=0, use_coarse_label=False):
 
     np.random.seed(seed)
 
     # Init entire training set
-    whole_training_set = CarsDataset(data_dir=car_root, transform=train_transform, train=True)
+    whole_training_set = CarsDataset(data_dir=car_root, transform=train_transform, train=True, use_coarse_label=use_coarse_label)
 
     # Get labelled training set which has subsampled classes, then subsample some indices from that
     train_dataset_labelled = subsample_classes(deepcopy(whole_training_set), include_classes=train_classes)
@@ -131,7 +135,7 @@ def get_scars_datasets(train_transform, test_transform, train_classes=range(160)
     train_dataset_unlabelled = subsample_dataset(deepcopy(whole_training_set), np.array(list(unlabelled_indices)))
 
     # Get test set for all classes
-    test_dataset = CarsDataset(data_dir=car_root, transform=test_transform, train=False)
+    test_dataset = CarsDataset(data_dir=car_root, transform=test_transform, train=False, use_coarse_label=use_coarse_label)
 
     # Either split train into train and val or use test set as val
     train_dataset_labelled = train_dataset_labelled_split if split_train_val else train_dataset_labelled

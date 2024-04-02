@@ -61,7 +61,7 @@ class FGVCAircraft(Dataset):
     splits = ('train', 'val', 'trainval', 'test')
 
     def __init__(self, root, class_type='variant', split='train', transform=None,
-                 target_transform=None, loader=default_loader, download=False):
+                 target_transform=None, loader=default_loader, download=False, use_coarse_label=False):
         if split not in self.splits:
             raise ValueError('Split "{}" not found. Valid splits are: {}'.format(
                 split, ', '.join(self.splits),
@@ -92,6 +92,7 @@ class FGVCAircraft(Dataset):
         self.train = True if split == 'train' else False
 
         self.uq_idxs = np.array(range(len(self)))
+        self.use_coarse_label = use_coarse_label
 
     def __getitem__(self, index):
         """
@@ -109,7 +110,11 @@ class FGVCAircraft(Dataset):
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        return sample, target, self.uq_idxs[index]
+        coarse_label = 0
+        if self.use_coarse_label:
+            return sample, target, coarse_label, self.uq_idxs[index]
+        else:
+            return sample, target, self.uq_idxs[index]
 
     def __len__(self):
         return len(self.samples)
@@ -218,7 +223,7 @@ def get_aircraft_datasets(train_transform, test_transform, train_classes=range(5
     np.random.seed(seed)
 
     # Init entire training set
-    whole_training_set = FGVCAircraft(root=aircraft_root, transform=train_transform, split='trainval')
+    whole_training_set = FGVCAircraft(root=aircraft_root, transform=train_transform, split='trainval', use_coarse_label=use_coarse_label)
 
     # Get labelled training set which has subsampled classes, then subsample some indices from that
     train_dataset_labelled = subsample_classes(deepcopy(whole_training_set), include_classes=train_classes)
@@ -236,7 +241,7 @@ def get_aircraft_datasets(train_transform, test_transform, train_classes=range(5
     train_dataset_unlabelled = subsample_dataset(deepcopy(whole_training_set), np.array(list(unlabelled_indices)))
 
     # Get test set for all classes
-    test_dataset = FGVCAircraft(root=aircraft_root, transform=test_transform, split='test')
+    test_dataset = FGVCAircraft(root=aircraft_root, transform=test_transform, split='test', use_coarse_label=use_coarse_label)
 
     # Either split train into train and val or use test set as val
     train_dataset_labelled = train_dataset_labelled_split if split_train_val else train_dataset_labelled

@@ -14,11 +14,11 @@ from data.augmentations import get_transform
 from data.get_datasets import get_datasets, get_class_splits
 
 from util.general_utils import AverageMeter, init_experiment, get_mean_lr, str2bool
-from util.cluster_and_log_utils import log_accs_from_preds, log_coarse_accs_from_preds, cluster_acc, log_target2coarse_accs
+from util.cluster_and_log_utils import log_accs_from_preds, log_coarse_accs_from_preds, cluster_acc, log_target2coarse_accs, add_to_label_same_w
 from util.ema_utils import EMA
 from util.memory_queue_utils import MemoryQueue
 from config import exp_root, dino_pretrain_path, resnet_pretrain_path
-from model import DINOHead, CoarseHead, TwoHead, CoarseFromFineHead, info_nce_logits, coarse_info_nce_logits, get_coarse_sup_logits_mean_labels, get_coarse_sup_logits_random_labels, get_coarse_sup_logits_mq_labels, SupConLoss, CoarseSupConLoss, DistillLoss, TCALoss, PrototypesLoss, ContrastiveLearningViewGenerator, get_params_groups
+from model import DINOHead, CoarseHead, TwoHead, CoarseFromFineHead, DoubleCoarseHead,info_nce_logits, coarse_info_nce_logits, get_coarse_sup_logits_mean_labels, get_coarse_sup_logits_random_labels, get_coarse_sup_logits_mq_labels, SupConLoss, CoarseSupConLoss, DistillLoss, TCALoss, PrototypesLoss, ContrastiveLearningViewGenerator, get_params_groups
 
 from vit_model import vision_transformer as vits
 from resnet_model import resnet 
@@ -72,10 +72,17 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                     args.cooloff_coarse_weight, args.cooloff_coarse_weight_end_epoch - args.cooloff_coarse_weight_start_epoch),
         np.ones(args.epochs - args.cooloff_coarse_weight_end_epoch) * args.cooloff_coarse_weight
     ))
+    doublecoarse_weight_schedule = np.concatenate((
+        np.ones(args.cooloff_coarse_weight_start_epoch) * 0.,
+        np.linspace(0., 1., args.cooloff_coarse_weight_end_epoch - args.cooloff_coarse_weight_start_epoch),
+        np.ones(args.epochs - args.cooloff_coarse_weight_end_epoch) * 1.0
+    ))
 
     if args.use_memory_queue:
         memory_queue = MemoryQueue(max_size=args.mq_maxsize, fine_label_num=args.mlp_out_dim, coarse_label_num=args.coarse_out_dim)
 
+    label_same_fine2coarse_w = np.zeros((args.mlp_out_dim, args.coarse_out_dim), dtype=int)
+    label_same_coarse2coarse_w = np.zeros((args.coarse_out_dim, args.coarse_out_dim), dtype=int)
     for epoch in range(start_epoch, args.epochs):
         loss_record = AverageMeter()
         fine_loss_record = AverageMeter()
@@ -86,18 +93,20 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
         contrastive_loss_record = AverageMeter()
 
         coarse_cls_loss_record = AverageMeter()
-        coarse_gt_cls_loss_record = AverageMeter()
         coarse_sup_cls_loss_record = AverageMeter()
         coarse_cluster_loss_record = AverageMeter()
         coarse_sup_con_loss_record = AverageMeter()
         coarse_contrastive_loss_record = AverageMeter()
+        double_coarse_loss_record = AverageMeter()
 
         fine_prototypes_loss_record = AverageMeter()
         coarse_prototypes_loss_record = AverageMeter()
 
         train_acc_labelled = AverageMeter()
         if args.use_coarse_label:
+            coarse_gt_cls_loss_record = AverageMeter()
             train_acc_coarse_labelled = AverageMeter()
+            train_acc_coarse_from_fine_labelled = AverageMeter()
 
         student.train()
         for batch_idx, batch in enumerate(train_loader):
@@ -112,7 +121,7 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
             images = torch.cat(images, dim=0).cuda(non_blocking=True)
 
             with torch.cuda.amp.autocast(fp16_scaler is not None):
-                student_rep, student_pred, student_proj, student_out, student_coarse_out = student(images)
+                student_rep, student_pred, student_proj, student_out, student_coarse_out, student_coarse_from_fine_out = student(images)
                 teacher_rep = student_rep.detach()
                 teacher_out = student_out.detach()
                 teacher_coarse_out = student_coarse_out.detach()
@@ -122,6 +131,7 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 else:
                     coarse_prototypes = student.projector.get_coarse_prototypes()
                 fine_prototypes = student.projector.get_fine_prototypes()
+                # coarse_from_fine_prototyps = student.projector.get_coarse_from_fine_prototypes()
 
                 # prototypes loss
                 fine_prototypes_loss = PrototypesLoss()(fine_prototypes)
@@ -143,10 +153,12 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
 
                 # coarse clustering, sup,
                 coarse_sup_logits = torch.cat([f[mask_lab] for f in (student_coarse_out).chunk(2)], dim=0)
+                coarse_from_fine_sup_logits = torch.cat([f[mask_lab] for f in (student_coarse_from_fine_out).chunk(2)], dim=0)
                 teacher_sup_logits = torch.cat([f[mask_lab] for f in teacher_out.chunk(2)], dim=0)
                 coarse_teacher_sup_logits = torch.cat([f[mask_lab] for f in teacher_coarse_out.chunk(2)], dim=0)
 
-                coarse_gt_cls_loss = nn.CrossEntropyLoss()(coarse_sup_logits / 0.1, coarse_sup_labels)
+                if args.use_coarse_label:
+                    coarse_gt_cls_loss = nn.CrossEntropyLoss()(coarse_sup_logits / 0.1, coarse_sup_labels)
 
                 if args.use_memory_queue:
                     # use memory queue
@@ -204,6 +216,12 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 sup_con_labels = class_labels[mask_lab]
                 coarse_sup_con_loss = CoarseSupConLoss()(teacher_rep, student_pred, labels=sup_con_labels)
 
+                # double coarse loss, unsup
+                double_coarse_loss = cluster_criterion(student_coarse_from_fine_out, teacher_coarse_out, epoch)
+                double_coarse_avg_probs = (student_coarse_from_fine_out / 0.1).softmax(dim=1).mean(dim=0)
+                double_coarse_me_max_loss = - torch.sum(torch.log(double_coarse_avg_probs ** (-double_coarse_avg_probs))) + math.log(float(len(double_coarse_avg_probs)))
+                double_coarse_loss += args.memax_weight * double_coarse_me_max_loss
+
                 pstr = ''
                 pstr += f'cls_loss: {cls_loss.item():.4f} '
                 pstr += f'cluster_loss: {cluster_loss.item():.4f} '
@@ -211,12 +229,14 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 pstr += f'contrastive_loss: {contrastive_loss.item():.4f} '
                 pstr += f'coarse_cls_loss: {coarse_cls_loss.item():.4f} '
                 pstr += f'coarse_sup_cls_loss: {coarse_sup_cls_loss.item():.4f} '
-                pstr += f'coarse_gt_cls_loss: {coarse_gt_cls_loss.item():.4f} '
+                if args.use_coarse_label:
+                    pstr += f'coarse_gt_cls_loss: {coarse_gt_cls_loss.item():.4f} '
                 pstr += f'coarse_cluster_loss: {coarse_cluster_loss.item():.4f} '
                 pstr += f'coarse_sup_con_loss: {coarse_sup_con_loss.item():.4f} '
                 pstr += f'coarse_contrastive_loss: {coarse_contrastive_loss.item():.4f} '
                 pstr += f'fine_prototypes_loss: {fine_prototypes_loss.item():.4f} '
                 pstr += f'coarse_prototypes_loss: {coarse_prototypes_loss.item():.4f} '
+                pstr += f'double_coarse_loss: {double_coarse_loss.item():.4f} '
 
                 fine_loss = 0.
                 fine_loss = args.sup_weight * (cls_loss + sup_con_loss) + (1 - args.sup_weight) * (cluster_loss + contrastive_loss + fine_prototypes_loss)
@@ -240,7 +260,9 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 # NOTE: PrototypesGtclsSupclsClusterContrastiveSupcontrastive
                 # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_gt_cls_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
                 # NOTE: PrototypesSupclsClusterContrastiveSupcontrastive
-                coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
+                # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
+                # NOTE: DoublecoarsePrototypesSupclsClusterContrastiveSupcontrastive
+                coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss + doublecoarse_weight_schedule[epoch] * double_coarse_loss)
 
                 loss = 0.
                 # loss = args.fine_weight * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
@@ -253,8 +275,12 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
 
             if args.use_coarse_label:
                 _, sup_coarse_pred = coarse_sup_logits.max(1)
+                _, sup_coarse_from_fine_pred = coarse_from_fine_sup_logits.max(1)
                 sup_coarse_acc = cluster_acc(y_true=coarse_sup_labels.cpu().numpy(), y_pred=sup_coarse_pred.cpu().numpy())
+                sup_coarse_from_fine_acc = cluster_acc(y_true=coarse_sup_labels.cpu().numpy(), y_pred=sup_coarse_from_fine_pred.cpu().numpy())
                 train_acc_coarse_labelled.update(sup_coarse_acc, sup_coarse_pred.size(0))
+                train_acc_coarse_from_fine_labelled.update(sup_coarse_from_fine_acc, sup_coarse_pred.size(0))
+                add_to_label_same_w(label_same_fine2coarse_w, label_same_coarse2coarse_w, sup_labels.cpu().numpy(), sup_coarse_pred.cpu().numpy())
 
             # NOTE: The count of cls_loss, coarse_cls_loss and coarse_sup_cls_loss is not accuracy
             loss_record.update(loss.item(), class_labels.size(0))
@@ -267,10 +293,12 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
             
             coarse_cls_loss_record.update(coarse_cls_loss.item(), class_labels.size(0))
             coarse_sup_cls_loss_record.update(coarse_sup_cls_loss.item(), class_labels.size(0))
-            coarse_gt_cls_loss_record.update(coarse_gt_cls_loss.item(), class_labels.size(0))
+            if args.use_coarse_label:
+                coarse_gt_cls_loss_record.update(coarse_gt_cls_loss.item(), class_labels.size(0))
             coarse_cluster_loss_record.update(coarse_cluster_loss.item(), class_labels.size(0))
             coarse_sup_con_loss_record.update(coarse_sup_con_loss.item(), class_labels.size(0))
             coarse_contrastive_loss_record.update(coarse_contrastive_loss.item(), class_labels.size(0))
+            double_coarse_loss_record.update(double_coarse_loss.item(), class_labels.size(0))
 
             fine_prototypes_loss_record.update(fine_prototypes_loss)
             coarse_prototypes_loss_record.update(coarse_prototypes_loss)
@@ -292,14 +320,16 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
 
         if (epoch + 1) % args.eval_freq == 0:
             args.logger.info('Testing on unlabelled examples in the training data...')
-            all_acc, old_acc, new_acc, coarse_acc, ind, w, coarse_ind, coarse_w = test(student, unlabelled_train_loader, epoch=epoch, save_name='Train ACC Unlabelled', args=args)
+            all_acc, old_acc, new_acc, coarse_acc, ind, w, coarse_ind, coarse_w, coarse_from_fine_acc, coarse_from_fine_ind, coarse_from_fine_w = test(student, unlabelled_train_loader, epoch=epoch, save_name='Train ACC Unlabelled', args=args)
             args.logger.info('Testing on disjoint test set...')
-            all_acc_test, old_acc_test, new_acc_test, coarse_acc_test, ind_test, w_test, coarse_ind_test, coarse_w_test = test(student, test_loader, epoch=epoch, save_name='Test ACC', args=args)
+            all_acc_test, old_acc_test, new_acc_test, coarse_acc_test, ind_test, w_test, coarse_ind_test, coarse_w_test, coarse_from_fine_acc_test, coarse_from_fine_ind_test, coarse_from_fine_w_test = test(student, test_loader, epoch=epoch, save_name='Test ACC', args=args)
             args.logger.info('Train Accuracies: All {:.4f} | Old {:.4f} | New {:.4f}'.format(all_acc, old_acc, new_acc))
             args.logger.info('Test Accuracies: All {:.4f} | Old {:.4f} | New {:.4f}'.format(all_acc_test, old_acc_test, new_acc_test))
             if args.use_coarse_label:
                 args.logger.info('Train Coarse Accuracies: {:.4f}'.format(coarse_acc))
                 args.logger.info('Test Coarse Accuracies: {:.4f}'.format(coarse_acc_test))
+                args.logger.info('Train CoarseFromFine Accuracies: {:.4f}'.format(coarse_from_fine_acc))
+                args.logger.info('Test CoarseFromFine Accuracies: {:.4f}'.format(coarse_from_fine_acc_test))
 
         # Step schedule
         exp_lr_scheduler.step()
@@ -313,15 +343,18 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
         args.writer.add_scalar('contrastive loss', contrastive_loss_record.avg, epoch)
         args.writer.add_scalar('coarse cls loss', coarse_cls_loss_record.avg, epoch)
         args.writer.add_scalar('coarse sup cls loss', coarse_sup_cls_loss_record.avg, epoch)
-        args.writer.add_scalar('coarse gt cls loss', coarse_gt_cls_loss_record.avg, epoch)
+        if args.use_coarse_label:
+            args.writer.add_scalar('coarse gt cls loss', coarse_gt_cls_loss_record.avg, epoch)
         args.writer.add_scalar('coarse cluster loss', coarse_cluster_loss_record.avg, epoch)
         args.writer.add_scalar('coarse sup con loss', coarse_sup_con_loss_record.avg, epoch)
         args.writer.add_scalar('coarse contrastive loss', coarse_contrastive_loss_record.avg, epoch)
         args.writer.add_scalar('Train Acc Labelled Data', train_acc_labelled.avg, epoch)
+        args.writer.add_scalar('double coarse loss', double_coarse_loss_record.avg, epoch)
         args.writer.add_scalar('fine prototypes loss', fine_prototypes_loss_record.avg, epoch)
         args.writer.add_scalar('coarse prototypes loss', coarse_prototypes_loss_record.avg, epoch)
         if args.use_coarse_label:
             args.writer.add_scalar('Train Acc Coarse Labelled Data', train_acc_coarse_labelled.avg, epoch)
+            args.writer.add_scalar('Train Acc CoarseFromFine Labelled Data', train_acc_coarse_from_fine_labelled.avg, epoch)
         args.writer.add_scalar('LR', get_mean_lr(optimizer), epoch) 
 
         if (epoch + 1) % args.save_freq == 0:
@@ -333,11 +366,17 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 'ind': ind,
                 'w': w,
                 'coarse_ind': coarse_ind,
+                'coarse_from_fine_ind': coarse_from_fine_ind,
                 'coarse_w': coarse_w,
+                'coarse_from_fine_w': coarse_from_fine_w,
                 'ind_test': ind_test,
                 'w_test': w_test,
                 'coarse_ind_test': coarse_ind_test,
-                'coarse_w_test': coarse_w_test
+                'coarse_from_fine_ind_test': coarse_from_fine_ind_test,
+                'coarse_w_test': coarse_w_test,
+                'coarse_from_fine_w_test': coarse_from_fine_w_test,
+                'label_same_fine2coarse_w': label_same_fine2coarse_w,
+                'label_same_coarse2coarse_w': label_same_coarse2coarse_w
             }
             save_path = os.path.join(args.model_dir, f'model_{epoch + 1}.pt')
             torch.save(save_dict, save_path)
@@ -371,7 +410,7 @@ def test(model, test_loader, epoch, save_name, args):
     preds, targets = [], []
     coarse_acc = 0.
     if args.use_coarse_label:
-        coarse_preds, coarse_targets = [], []
+        coarse_preds, coarse_from_fine_preds, coarse_targets = [], [], []
     mask = np.array([])
     for batch_idx, data in enumerate(tqdm(test_loader)):
         if args.use_coarse_label:
@@ -380,13 +419,14 @@ def test(model, test_loader, epoch, save_name, args):
             (images, label, _) = data
         images = images.cuda(non_blocking=True)
         with torch.no_grad():
-            _, _, _, logits, coarse_logits = model(images)
+            _, _, _, logits, coarse_logits, coarse_from_fine_logits = model(images)
             # _, logits, coarse_logits = model(images)
             preds.append(logits.argmax(1).cpu().numpy())
             targets.append(label.cpu().numpy())
             mask = np.append(mask, np.array([True if x.item() in range(len(args.train_classes)) else False for x in label]))
             if args.use_coarse_label:
                 coarse_preds.append(coarse_logits.argmax(1).cpu().numpy())
+                coarse_from_fine_preds.append(coarse_from_fine_logits.argmax(1).cpu().numpy())
                 coarse_targets.append(coarse_label.cpu().numpy())
 
     preds = np.concatenate(preds)
@@ -397,13 +437,18 @@ def test(model, test_loader, epoch, save_name, args):
 
     if args.use_coarse_label:
         coarse_preds = np.concatenate(coarse_preds)
+        coarse_from_fine_preds = np.concatenate(coarse_from_fine_preds)
         coarse_targets = np.concatenate(coarse_targets)
         coarse_acc, coarse_ind, coarse_w = log_coarse_accs_from_preds(y_true=coarse_targets, y_pred=coarse_preds,
-                                            T=epoch, save_name=save_name, args=args)
+                                            T=epoch, save_name=f'{save_name}_Coarse', args=args)
+        coarse_from_fine_acc, coarse_from_fine_ind, coarse_from_fine_w = log_coarse_accs_from_preds(y_true=coarse_targets, y_pred=coarse_from_fine_preds,
+                                                                                                    T=epoch, save_name=f'{save_name}_CoarseFromFine', args=args)
         log_target2coarse_accs(preds=preds, ind=ind, coarse_preds=coarse_preds, coarse_ind=coarse_ind, coarse_targets=coarse_targets,
-                               save_name=save_name, T=epoch, args=args)
+                               save_name=f'{save_name}_Twohead_Coarse', T=epoch, args=args)
+        log_target2coarse_accs(preds=preds, ind=ind, coarse_preds=coarse_from_fine_preds, coarse_ind=coarse_from_fine_ind, coarse_targets=coarse_targets,
+                               save_name=f'{save_name}_Twohead_CoarseFromFine', T=epoch, args=args)
 
-    return all_acc, old_acc, new_acc, coarse_acc, ind, w, coarse_ind, coarse_w
+    return all_acc, old_acc, new_acc, coarse_acc, ind, w, coarse_ind, coarse_w, coarse_from_fine_acc, coarse_from_fine_ind, coarse_from_fine_w
 
 if __name__ == "__main__":
 
@@ -489,7 +534,20 @@ if __name__ == "__main__":
     args.interpolation = 3
     args.crop_pct = 0.875
     args.mlp_out_dim = args.num_labeled_classes + args.num_unlabeled_classes
-    args.coarse_out_dim = 20
+    # TODO: set coarse label num
+    if args.dataset_name == 'cifar100' or args.dataset_name == 'cifar100small':
+        args.coarse_out_dim = 20
+    elif args.dataset_name == 'cifar10':
+        args.coarse_out_dim = 2
+    elif args.dataset_name == 'herbarium_19':
+        args.coarse_out_dim = 50
+    elif args.dataset_name == 'aircraft':
+        args.coarse_out_dim = 20
+    elif args.dataset_name == 'scars':
+        args.coarse_out_dim = 30
+    elif args.dataset_name == 'cub':
+        args.coarse_out_dim = 30
+
 
     if args.model_arch == 'vit':
         args.feat_dim = 768
@@ -567,7 +625,8 @@ if __name__ == "__main__":
     # projector = DINOHead(in_dim=args.feat_dim, out_dim=args.mlp_out_dim, nlayers=args.num_mlp_layers)
     # projector = CoarseHead(dino_in_dim=args.feat_dim, dino_out_dim=args.mlp_out_dim, dino_nlayers=args.num_mlp_layers)
     # projector = TwoHead(in_dim=args.feat_dim, out_dim_fine=args.mlp_out_dim, out_dim_coarse=args.coarse_out_dim, mlp_nlayers=args.num_mlp_layers)
-    projector = CoarseFromFineHead(in_dim=args.feat_dim, out_dim_fine=args.mlp_out_dim, out_dim_coarse=args.coarse_out_dim, mlp_nlayers=args.num_mlp_layers)
+    # projector = CoarseFromFineHead(in_dim=args.feat_dim, out_dim_fine=args.mlp_out_dim, out_dim_coarse=args.coarse_out_dim, mlp_nlayers=args.num_mlp_layers)
+    projector = DoubleCoarseHead(in_dim=args.feat_dim, out_dim_fine=args.mlp_out_dim, out_dim_coarse=args.coarse_out_dim, mlp_nlayers=args.num_mlp_layers)
     # model = nn.Sequential(backbone, projector).to(device)
     model = nn.Sequential(OrderedDict([
         ('backbone', backbone),
@@ -582,17 +641,21 @@ if __name__ == "__main__":
     if args.do_test:
         if args.warmup_model_dir is None:
             raise ValueError('args.warmup_model_dir is None')
-        _, __, ___, ____, ind, w, coarse_ind, coarse_w = test(model, test_loader_unlabelled, epoch=None, save_name='Train ACC Unlabelled', args=args)
-        _, __, ___, ____, ind_test, w_test, coarse_ind_test, coarse_w_test = test(model, test_loader_labelled, epoch=None, save_name='Test ACC', args=args)
+        _, __, ___, ____, ind, w, coarse_ind, coarse_w, _____, coarse_from_fine_ind, coarse_from_fine_w = test(model, test_loader_unlabelled, epoch=None, save_name='Train ACC Unlabelled', args=args)
+        _, __, ___, ____, ind_test, w_test, coarse_ind_test, coarse_w_test, _____, coarse_from_fine_ind_test, coarse_from_fine_w_test = test(model, test_loader_labelled, epoch=None, save_name='Test ACC', args=args)
         save_dict = {
             'ind': ind,
             'w': w,
             'coarse_ind': coarse_ind,
             'coarse_w': coarse_w,
+            'coarse_form_fine_ind': coarse_from_fine_ind,
+            'coarse_from_fine_w': coarse_from_fine_w,
             'ind_test': ind_test,
             'w_test': w_test,
             'coarse_ind_test': coarse_ind_test,
-            'coarse_w_test': coarse_w_test
+            'coarse_w_test': coarse_w_test,
+            'coarse_from_fine_ind_test': coarse_from_fine_ind_test,
+            'coarse_from_fine_w_test': coarse_from_fine_w_test
         }
         save_path = os.path.join(args.model_dir, f'ind_w.pt')
         torch.save(save_dict, save_path)

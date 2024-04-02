@@ -99,7 +99,7 @@ def get_train_val_indices(train_dataset, val_split=0.2):
 
 
 def get_cifar_10_datasets(train_transform, test_transform, train_classes=(0, 1, 8, 9),
-                       prop_train_labels=0.8, split_train_val=False, seed=0):
+                       prop_train_labels=0.8, split_train_val=False, seed=0, use_coarse_label=False):
 
     np.random.seed(seed)
 

@@ -210,14 +210,16 @@ class VisionTransformer(nn.Module):
 
     def forward(self, x, return_all_patches=False):
         x = self.prepare_tokens(x)
+        last_x = x
         for blk in self.blocks:
+            last_x = x
             x = blk(x)
         x = self.norm(x)
 
         if return_all_patches:
-            return x
+            return x, last_x
         else:
-            return x[:, 0]
+            return x[:, 0], last_x[:, 0]
 
     def get_last_selfattention(self, x):
         x = self.prepare_tokens(x)

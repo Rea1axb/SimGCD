@@ -17,7 +17,7 @@ class CustomCub2011(Dataset):
     filename = 'CUB_200_2011.tgz'
     tgz_md5 = '97eceeb196236b17998738112f37df78'
 
-    def __init__(self, root, train=True, transform=None, target_transform=None, loader=default_loader, download=True):
+    def __init__(self, root, train=True, transform=None, target_transform=None, loader=default_loader, download=True, use_coarse_label=False):
 
         self.root = os.path.expanduser(root)
         self.transform = transform
@@ -25,6 +25,7 @@ class CustomCub2011(Dataset):
 
         self.loader = loader
         self.train = train
+        self.use_coarse_label = use_coarse_label
 
 
         if download:
@@ -85,14 +86,17 @@ class CustomCub2011(Dataset):
         path = os.path.join(self.root, self.base_folder, sample.filepath)
         target = sample.target - 1  # Targets start at 1 by default, so shift to 0
         img = self.loader(path)
-
+        coarse_label = 0
         if self.transform is not None:
             img = self.transform(img)
 
         if self.target_transform is not None:
             target = self.target_transform(target)
 
-        return img, target, self.uq_idxs[idx]
+        if self.use_coarse_label:
+            return img, target, coarse_label, self.uq_idxs[idx]
+        else:
+            return img, target, self.uq_idxs[idx]
 
 
 def subsample_dataset(dataset, idxs):
@@ -149,7 +153,7 @@ def get_cub_datasets(train_transform, test_transform, train_classes=range(160), 
     np.random.seed(seed)
 
     # Init entire training set
-    whole_training_set = CustomCub2011(root=cub_root, transform=train_transform, train=True, download=download)
+    whole_training_set = CustomCub2011(root=cub_root, transform=train_transform, train=True, download=download, use_coarse_label=use_coarse_label)
 
     # Get labelled training set which has subsampled classes, then subsample some indices from that
     train_dataset_labelled = subsample_classes(deepcopy(whole_training_set), include_classes=train_classes)
@@ -167,7 +171,7 @@ def get_cub_datasets(train_transform, test_transform, train_classes=range(160), 
     train_dataset_unlabelled = subsample_dataset(deepcopy(whole_training_set), np.array(list(unlabelled_indices)))
 
     # Get test set for all classes
-    test_dataset = CustomCub2011(root=cub_root, transform=test_transform, train=False)
+    test_dataset = CustomCub2011(root=cub_root, transform=test_transform, train=False, use_coarse_label=use_coarse_label)
 
     # Either split train into train and val or use test set as val
     train_dataset_labelled = train_dataset_labelled_split if split_train_val else train_dataset_labelled

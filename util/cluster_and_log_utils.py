@@ -10,6 +10,19 @@ def all_sum_item(item):
     dist.all_reduce(item)
     return item.item()
 
+def add_to_label_same_w(label_same_fine2coarse_w, label_same_coarse2coarse_w, y_true, coarse_y_pred):
+    y_true = y_true.astype(int)
+    for i in range(y_true.size):
+        label_same_fine2coarse_w[y_true[i], coarse_y_pred[i]] += 1
+        label_same_coarse2coarse_w[get_cifar100_coarse_labels(y_true[i]), coarse_y_pred[i]] += 1
+
+
+def same_coarse_acc(fine_num, coarse_num, label_same_fine2coarse_w):
+    same_coarse_w = np.zeros((coarse_num, coarse_num))
+    for i in range(fine_num):
+        same_coarse_w[get_cifar100_coarse_labels[i], label_same_fine2coarse_w[i].argmax()] += label_same_fine2coarse_w[i].max()
+    return same_coarse_w
+
 def cluster_acc(y_true, y_pred, return_ind=False):
     """
     Calculate clustering accuracy. Require scikit-learn installed
@@ -252,7 +265,7 @@ def log_coarse_accs_from_preds(y_true, y_pred, save_name, T=None,
     y_pred = y_pred.astype(int)
     coarse_acc, ind, w = cluster_acc(y_true, y_pred, return_ind=True)
     to_return = (coarse_acc, ind, w)
-    log_name = f'{save_name}_Coarse'
+    log_name = f'{save_name}'
     if args.writer is not None:
         args.writer.add_scalar(log_name, coarse_acc, T)
     if print_output:
@@ -269,7 +282,10 @@ def log_target2coarse_accs(preds, ind, coarse_preds, coarse_ind, coarse_targets,
     coarse_targets = coarse_targets.astype(int)
     
     # map pseudo target label to true coarse label: pseudo target label -> true target label -> true coarse label
-    ind_target2coarse_map = {i:get_cifar100_coarse_labels(j) for i, j in ind}
+    if args.dataset_name == 'cifar100' or args.dataset_name == 'cifar100small':
+        ind_target2coarse_map = {i:get_cifar100_coarse_labels(j) for i, j in ind}
+    else:
+        ind_target2coarse_map = {i:j for i, j in ind}
     target2coarse_preds = np.vectorize(ind_target2coarse_map.get)(preds)
 
     # map pseudo coarse label to true coarse label: pseudo coarse label -> true coarse label
@@ -280,7 +296,7 @@ def log_target2coarse_accs(preds, ind, coarse_preds, coarse_ind, coarse_targets,
     coarse2coarse_acc = (coarse2coarse_preds == coarse_targets).mean() # assert equal to 'coarse_acc' returned by func log_coarse_accs_from_preds
     twohead_coarse_acc = (target2coarse_preds == coarse2coarse_preds).mean()
 
-    log_name = f'{save_name}_Twohead_Coarse'
+    log_name = f'{save_name}'
     if args.writer is not None:
         args.writer.add_scalars(log_name, {
             'T2C_acc': target2coarse_acc,

@@ -179,6 +179,90 @@ class CoarseFromFineHead(nn.Module):
         fine_weight = nn.functional.normalize(fine_weight, dim=-1, p=2)
         return fine_weight
 
+class DoubleCoarseHead(nn.Module):
+    def __init__(self, in_dim, out_dim_fine, out_dim_coarse, use_bn=False, norm_last_layer=True,
+                 mlp_nlayers=3, hidden_dim=2048, bottleneck_dim=256, attn_head=1):
+        super(DoubleCoarseHead, self).__init__()
+        nlayers = max(mlp_nlayers, 1)
+        if nlayers == 1:
+            self.mlp = nn.Linear(in_dim, bottleneck_dim)
+        elif nlayers != 0:
+            layers = [nn.Linear(in_dim, hidden_dim)]
+            if use_bn:
+                layers.append(nn.BatchNorm1d(hidden_dim))
+            layers.append(nn.GELU())
+            for _ in range(nlayers - 2):
+                layers.append(nn.Linear(hidden_dim, hidden_dim))
+                if use_bn:
+                    layers.append(nn.BatchNorm1d(hidden_dim))
+                layers.append(nn.GELU())
+            layers.append(nn.Linear(hidden_dim, bottleneck_dim))
+            self.mlp = nn.Sequential(*layers)
+        self.predictor = nn.Sequential(
+            nn.Linear(in_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.GELU(),
+            nn.Linear(hidden_dim, in_dim)
+        )
+        # self.attn = MultiheadAttention(hid_dim=in_dim, n_heads=attn_head)
+        self.coarse_from_fine_layer = nn.Linear(out_dim_fine, out_dim_coarse, bias=False)
+        # self.coarse_query_layer = nn.Linear(in_dim, out_dim_coarse, bias=False)
+        self.apply(self._init_weights)
+        self.fine_last_layer = nn.utils.weight_norm(nn.Linear(in_dim, out_dim_fine, bias=False))
+        self.fine_last_layer.weight_g.data.fill_(1)
+        self.coarse_last_layer = nn.utils.weight_norm(nn.Linear(in_dim, out_dim_coarse, bias=False))
+        self.coarse_last_layer.weight_g.data.fill_(1)
+        if norm_last_layer:
+            self.fine_last_layer.weight_g.requires_grad = False
+            self.coarse_last_layer.weight_g.requires_grad = False
+        
+    
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+    
+    def forward(self, input_x):
+        x = input_x[0]
+        # last_x = input_x[1]
+        last_x = input_x[0]
+        x_proj = self.mlp(x)
+        x_pred = self.predictor(x)
+        x = nn.functional.normalize(x, dim=-1, p=2)
+        x_pred = nn.functional.normalize(x_pred, dim=-1, p=2)
+        # x = x.detach()
+        fine_logits = self.fine_last_layer(x)
+        coarse_logits = self.coarse_last_layer(last_x)
+        # coarse_prototypes = self.get_coarse_prototypes_with_attention(proj=False)
+        coarse_from_fine_prototypes = self.get_coarse_from_fine_prototypes(proj=False)
+        coarse_from_fine_logits = torch.matmul(x, coarse_from_fine_prototypes.T)
+        # coarse_logits = torch.matmul(x, coarse_prototypes.T)
+        return x, x_pred, x_proj, fine_logits, coarse_logits, coarse_from_fine_logits
+    
+    # NOTE: in pytorch 1.12, The weight is recomputed once at module forward, so use the following functions after module forward
+    def get_coarse_prototypes(self, proj=True):
+        coarse_weight = self.coarse_last_layer.weight
+        if proj:
+            coarse_weight = self.mlp(coarse_weight)
+        coarse_weight = nn.functional.normalize(coarse_weight, dim=-1, p=2)
+        return coarse_weight
+    
+    def get_coarse_from_fine_prototypes(self, proj=True):
+        fine_weight = self.fine_last_layer.weight
+        coarse_weight = self.coarse_from_fine_layer(fine_weight.T).T
+        if proj:
+            coarse_weight = self.mlp(coarse_weight)
+        coarse_weight = nn.functional.normalize(coarse_weight, dim=-1, p=2)
+        return coarse_weight
+    
+    def get_fine_prototypes(self, proj=True):
+        fine_weight = self.fine_last_layer.weight
+        if proj:
+            fine_weight = self.mlp(fine_weight)
+        fine_weight = nn.functional.normalize(fine_weight, dim=-1, p=2)
+        return fine_weight
+
 
 class TwoHead(nn.Module):
     def __init__(self, in_dim, out_dim_fine, out_dim_coarse, use_bn=False, norm_last_layer=True,
@@ -252,12 +336,14 @@ class TwoHead(nn.Module):
         coarse_weight = self.coarse_last_layer.weight
         if proj:
             coarse_weight = self.mlp(coarse_weight)
+        coarse_weight = nn.functional.normalize(coarse_weight, p=2, dim=-1)
         return coarse_weight
 
     def get_fine_prototypes(self, proj=True):
         fine_weight = self.fine_last_layer.weight
         if proj:
             fine_weight = self.mlp(fine_weight)
+        fine_weight = nn.functional.normalize(fine_weight, p=2, dim=-1)
         return fine_weight
 
 
@@ -514,6 +600,15 @@ def coarse_info_nce_logits(features, prototypes, coarse_logits, temperature=1.0,
     labels = labels.to(device)
     logits = similarity_matrix / temperature
     return logits, labels
+
+def double_coarse_info_nce_logits(coarse_prototypes_1, coarse_prototypes_2, temperature=1.0, device='cuda'):
+    coarse_prototypes_1 = F.normalize(coarse_prototypes_1, dim=1)
+    coarse_prototypes_2 = F.normalize(coarse_prototypes_2, dim=1)
+    similarity_matrix = torch.matmul(coarse_prototypes_1, coarse_prototypes_2.T)
+    label_matrix = torch.eye(coarse_prototypes_1.shape[0], dtype=torch.long).to(device)
+    logits = similarity_matrix / temperature
+    return logits, labels
+
 
 def get_coarse_sup_logits_mean_labels(teacher_coarse_logits, fine_labels, fine_out_dim, device='cuda'):
     fine_labels = torch.eye(fine_out_dim)[fine_labels].to(device)

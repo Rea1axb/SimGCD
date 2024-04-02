@@ -9,19 +9,23 @@ from config import herbarium_dataroot
 
 class HerbariumDataset19(torchvision.datasets.ImageFolder):
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, use_coarse_label=False, *args, **kwargs):
 
         # Process metadata json for training images into a DataFrame
         super().__init__(*args, **kwargs)
 
         self.uq_idxs = np.array(range(len(self)))
+        self.use_coarse_label = use_coarse_label
 
     def __getitem__(self, idx):
 
         img, label = super().__getitem__(idx)
         uq_idx = self.uq_idxs[idx]
-
-        return img, label, uq_idx
+        coarse_label = 0
+        if self.use_coarse_label:
+            return img, label, coarse_label, uq_idx
+        else:
+            return img, label, uq_idx
 
 
 def subsample_dataset(dataset, idxs):
@@ -77,13 +81,13 @@ def get_train_val_indices(train_dataset, val_instances_per_class=5):
 
 
 def get_herbarium_datasets(train_transform, test_transform, train_classes=range(500), prop_train_labels=0.8,
-                            seed=0, split_train_val=False):
+                            seed=0, split_train_val=False, use_coarse_label=False):
 
     np.random.seed(seed)
 
     # Init entire training set
     train_dataset = HerbariumDataset19(transform=train_transform,
-                                            root=os.path.join(herbarium_dataroot, 'small-train'))
+                                            root=os.path.join(herbarium_dataroot, 'small-train'), use_coarse_label=use_coarse_label)
 
     # Get labelled training set which has subsampled classes, then subsample some indices from that
     # TODO: Subsampling unlabelled set in uniform random fashion from training data, will contain many instances of dominant class
@@ -110,7 +114,7 @@ def get_herbarium_datasets(train_transform, test_transform, train_classes=range(
 
     # Get test dataset
     test_dataset = HerbariumDataset19(transform=test_transform,
-                                            root=os.path.join(herbarium_dataroot, 'small-validation'))
+                                            root=os.path.join(herbarium_dataroot, 'small-validation'), use_coarse_label=use_coarse_label)
 
     # Transform dict
     unlabelled_classes = list(set(train_dataset.targets) - set(train_classes))
