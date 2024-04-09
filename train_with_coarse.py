@@ -263,6 +263,10 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
                 # NOTE: DoublecoarsePrototypesSupclsClusterContrastiveSupcontrastive
                 coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss + doublecoarse_weight_schedule[epoch] * double_coarse_loss)
+                # NOTE: DoublecoarsePrototypesSupclsClusterContrastiveSupcontrastive + W_entropy_loss
+                # proj_softmax_weight = torch.softmax(student.projector.coarse_from_fine_layer.weight, dim=0)
+                # W_entropy_loss = torch.sum(torch.log(proj_softmax_weight ** (-proj_softmax_weight)))
+                # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss + doublecoarse_weight_schedule[epoch] * (double_coarse_loss + args.weight_decay * W_entropy_loss))
 
                 loss = 0.
                 # loss = args.fine_weight * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
@@ -357,7 +361,7 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
             args.writer.add_scalar('Train Acc CoarseFromFine Labelled Data', train_acc_coarse_from_fine_labelled.avg, epoch)
         args.writer.add_scalar('LR', get_mean_lr(optimizer), epoch) 
 
-        if (epoch + 1) % args.save_freq == 0:
+        if (epoch + 1) % args.save_freq == 0 or epoch + 1 == args.epochs:
             save_dict = {
                 'model': student.state_dict(),
                 'optimizer': optimizer.state_dict(),

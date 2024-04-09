@@ -20,14 +20,14 @@ from data.cub import CustomCub2011, cub_root
 from data.fgvc_aircraft import FGVCAircraft, aircraft_root
 
 from vit_model import vision_transformer as vits
-from model import TwoHead
+from model import TwoHead, DoubleCoarseHead
 
 # from project_utils.general_utils import strip_state_dict, str2bool
 from copy import deepcopy
 
 from config import feature_extract_dir, dino_pretrain_path
 
-def extract_features_dino(model, loader, save_dir, extract_block=False):
+def extract_features_dino(model, loader, save_dir, extract_block=False, extract_block_num=11):
 
     model.to(device)
     model.eval()
@@ -37,8 +37,8 @@ def extract_features_dino(model, loader, save_dir, extract_block=False):
             images, labels, idxs = batch[:3]
             images = images.to(device)
             if extract_block:
-                features = model.get_intermediate_layers(images, n=12)
-                for layer, feat in enumerate(features):
+                features = model.backbone.get_intermediate_layers(images, n=12 - extract_block_num)
+                for layer, feat in enumerate(features, extract_block_num):
                     for f, t, uq in zip(feat, labels, idxs):
                         t = t.item()
                         uq = uq.item()
@@ -95,6 +95,7 @@ if __name__ == "__main__":
     parser.add_argument('--dataset', type=str, default='aircraft', help='options: cifar10, cifar100, scars')
     parser.add_argument('--setting', type=str, default='default', help='dataset setting')
     parser.add_argument('--extract_block', action='store_true', default=False, help='extract feature from all blocks')
+    parser.add_argument('--extract_block_num', default=11, type=int, help='number of block which start to extract feature, number start from 0')
     parser.add_argument('--exp_name', default=None, type=str)
 
     # ----------------------
@@ -200,7 +201,6 @@ if __name__ == "__main__":
     # MODEL
     # ----------------------
     if args.model_name == 'twohead':
-
         extract_features_func = extract_features_dino
         args.feat_dim = 768
         args.image_size = 224
@@ -211,9 +211,18 @@ if __name__ == "__main__":
             ('backbone', backbone),
             ('projector', projector)
         ]))
-
+    elif args.model_name == 'doublecoarse':
+        extract_features_func = extract_features_dino
+        args.feat_dim = 768
+        args.image_size = 224
+        args.num_mlp_layers = 3
+        backbone = vits.__dict__['vit_base']()
+        projector = DoubleCoarseHead(in_dim=args.feat_dim, out_dim_fine=args.mlp_out_dim, out_dim_coarse=args.coarse_out_dim, mlp_nlayers=args.num_mlp_layers)
+        model = nn.Sequential(OrderedDict([
+            ('backbone', backbone),
+            ('projector', projector)
+        ]))
     else:
-
         raise NotImplementedError
 
     if args.warmup_model_dir is not None:
@@ -240,7 +249,7 @@ if __name__ == "__main__":
         os.makedirs(args.save_dir)
 
     if args.extract_block:
-        for layer in range(12):
+        for layer in range(args.extract_block_num, 12):
             for fold in ('train', 'test'):
                 fold_dir = os.path.join(args.save_dir, fold)
                 if not os.path.exists(fold_dir):
@@ -271,11 +280,11 @@ if __name__ == "__main__":
     # Extract train features
     train_save_dir = os.path.join(args.save_dir, 'train')
     print('Extracting features from train split...')
-    extract_features_func(model=model, loader=train_loader, save_dir=train_save_dir, extract_block=args.extract_block)
+    extract_features_func(model=model, loader=train_loader, save_dir=train_save_dir, extract_block=args.extract_block, extract_block_num=args.extract_block_num)
 
     # Extract test features
     test_save_dir = os.path.join(args.save_dir, 'test')
     print('Extracting features from test split...')
-    extract_features_func(model=model, loader=test_loader, save_dir=test_save_dir, extract_block=args.extract_block)
+    extract_features_func(model=model, loader=test_loader, save_dir=test_save_dir, extract_block=args.extract_block, extract_block_num=args.extract_block_num)
 
     print('Done!')

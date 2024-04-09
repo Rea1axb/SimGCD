@@ -25,7 +25,7 @@ set -x
 
 CUDA_VISIBLE_DEVICES=2 python train_with_coarse.py \
     --dataset_name 'cifar100' \
-    --setting 'completely_new' \
+    --setting 'default' \
     --batch_size 256 \
     --grad_from_block 11 \
     --epochs 200 \
@@ -40,6 +40,7 @@ CUDA_VISIBLE_DEVICES=2 python train_with_coarse.py \
     --warmup_teacher_temp_epochs 30 \
     --memax_weight 4 \
     --eval_freq 10 \
+    --save_freq 30 \
     --fine_weight 1.0 \
     --warmup_coarse_weight 0.0 \
     --warmup_coarse_weight_start_epoch 30 \
@@ -55,7 +56,7 @@ CUDA_VISIBLE_DEVICES=2 python train_with_coarse.py \
     --mq_query_mode 'soft' \
     --mq_maxsize 1024 \
     --use_prototypes_attention 'False' \
-    --exp_name 'cifar100_completely_new_twohead(DoubleCoarsePrototypesSupclsmqsoftClusterContrastiveSupcontrastiveCoarse)_weight(warmup_30-60_0.0-0.5_cooloff_120-150_0.5-0.2)_fineweight(dynamic)_batchsz(256)'
+    --exp_name 'cifar100_default_twohead(DoubleCoarsePrototypesSupclsmqsoftClusterContrastiveSupcontrastiveCoarse)_weight(warmup_30-60_0.0-0.5_cooloff_120-150_0.5-0.2)_fineweight(dynamic)_batchsz(256)'
 
 # CUDA_VISIBLE_DEVICES=3 python train.py \
 #     --dataset_name 'cifar100' \

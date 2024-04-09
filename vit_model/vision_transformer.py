@@ -232,14 +232,17 @@ class VisionTransformer(nn.Module):
                 x = self.norm(x)
                 return x, attn
 
-    def get_intermediate_layers(self, x, n=1):
+    def get_intermediate_layers(self, x, n=1, return_all_patches=False):
         x = self.prepare_tokens(x)
         # we return the output tokens from the `n` last blocks
         output = []
         for i, blk in enumerate(self.blocks):
             x = blk(x)
             if len(self.blocks) - i <= n:
-                output.append(self.norm(x))
+                if return_all_patches:
+                    output.append(self.norm(x))
+                else:
+                    output.append(self.norm(x[:, 0]))
         return output
 
 
