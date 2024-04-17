@@ -45,8 +45,7 @@ def extract_features_dino(model, loader, save_dir, extract_block=False, extract_
                         save_path = os.path.join(save_dir, f'layer_{layer}', f'{t}', f'{uq}.npy')
                         torch.save(f.detach().cpu().numpy(), save_path)
             else:
-                features = model.backbone(images)         # CLS_Token for ViT, Average pooled vector for R50
-
+                features, _ = model.backbone(images)         # CLS_Token for ViT, Average pooled vector for R50
                 # Save features
                 for f, t, uq in zip(features, labels, idxs):
 
@@ -92,6 +91,7 @@ if __name__ == "__main__":
                         default=None)
     # parser.add_argument('--use_best_model', type='store_true', default=False)
     parser.add_argument('--model_name', type=str, default='vit_dino', help='Format is {model_name}_{pretrain}')
+    parser.add_argument('--transform', type=str, default='imagenet')
     parser.add_argument('--dataset', type=str, default='aircraft', help='options: cifar10, cifar100, scars')
     parser.add_argument('--setting', type=str, default='default', help='dataset setting')
     parser.add_argument('--extract_block', action='store_true', default=False, help='extract feature from all blocks')
@@ -109,7 +109,8 @@ if __name__ == "__main__":
 
     args.interpolation = 3
     args.crop_pct = 0.875
-    _, val_transform = get_transform('imagenet', image_size=224, args=args)
+    # _, val_transform = get_transform('imagenet', image_size=224, args=args)
+    _, val_transform = get_transform(args.transform, image_size=224, args=args)
 
 
     print('Loading data...')
