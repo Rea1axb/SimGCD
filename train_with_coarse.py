@@ -74,7 +74,7 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
     ))
     doublecoarse_weight_schedule = np.concatenate((
         np.ones(args.cooloff_coarse_weight_start_epoch) * 0.,
-        np.linspace(0., 1., args.cooloff_coarse_weight_end_epoch - args.cooloff_coarse_weight_start_epoch),
+        np.linspace(0., 0.5, args.cooloff_coarse_weight_end_epoch - args.cooloff_coarse_weight_start_epoch),
         np.ones(args.epochs - args.cooloff_coarse_weight_end_epoch) * 1.0
     ))
 
@@ -262,7 +262,8 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 # NOTE: PrototypesSupclsClusterContrastiveSupcontrastive
                 # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
                 # NOTE: DoublecoarsePrototypesSupclsClusterContrastiveSupcontrastive
-                coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss + doublecoarse_weight_schedule[epoch] * double_coarse_loss)
+                # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss + doublecoarse_weight_schedule[epoch] * double_coarse_loss)
+                coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
                 # NOTE: DoublecoarsePrototypesSupclsClusterContrastiveSupcontrastive + W_entropy_loss
                 # proj_softmax_weight = torch.softmax(student.projector.coarse_from_fine_layer.weight, dim=0)
                 # W_entropy_loss = torch.sum(torch.log(proj_softmax_weight ** (-proj_softmax_weight)))
@@ -270,7 +271,8 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
 
                 loss = 0.
                 # loss = args.fine_weight * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
-                loss = (1.0 - coarse_weight_schedule[epoch]) * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
+                # loss = (1.0 - coarse_weight_schedule[epoch]) * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
+                loss = (1.0 - coarse_weight_schedule[epoch]) * fine_loss + coarse_weight_schedule[epoch] * coarse_loss + doublecoarse_weight_schedule[epoch] * double_coarse_loss
                 
             # Train acc
             _, sup_pred = sup_logits.max(1)
