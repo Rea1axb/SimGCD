@@ -201,8 +201,10 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 contrastive_loss = torch.nn.CrossEntropyLoss()(contrastive_logits, contrastive_labels)
 
                 # coarse represent learning, unsup
-                coarse_contrastive_logits, coarse_contrastive_labels = coarse_info_nce_logits(features=student_proj, prototypes=coarse_prototypes, coarse_logits=student_coarse_out)
-                coarse_contrastive_loss = torch.nn.CrossEntropyLoss()(coarse_contrastive_logits, coarse_contrastive_labels)
+                #TODO: coarse_confidence 没用
+                coarse_contrastive_logits, coarse_contrastive_labels, coarse_confidence = coarse_info_nce_logits(features=student_proj, prototypes=coarse_prototypes, coarse_logits=student_coarse_out)
+                coarse_contrastive_loss_list = torch.nn.CrossEntropyLoss(reduction='none')(coarse_contrastive_logits, coarse_contrastive_labels)
+                coarse_contrastive_loss = torch.sum(coarse_contrastive_loss_list * coarse_confidence) / len(coarse_contrastive_loss_list)
 
                 # representation learning, sup                
                 student_proj = torch.cat([f[mask_lab].unsqueeze(1) for f in student_proj.chunk(2)], dim=1)

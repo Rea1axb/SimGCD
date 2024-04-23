@@ -130,6 +130,9 @@ def get_class_splits(args):
                 for j in range(4):
                     args.train_classes.append(cifar100_coarse_labels_dict[i][j])
                 args.unlabeled_classes.append(cifar100_coarse_labels_dict[i][4])
+        elif args.setting == '50OLD50NEW':
+            args.train_classes = range(50)
+            args.unlabeled_classes = range(50, 100)
         else:
             raise NotImplementedError
 

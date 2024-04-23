@@ -185,7 +185,7 @@ def subsample_classes(dataset, include_classes=range(60)):
 
     cls_idxs = [i for i, (p, t) in enumerate(dataset.samples) if t in include_classes]
 
-    # TODO: Don't transform targets for now
+    # TODO: Don't transform targets for now, use deepcopy
     target_xform_dict = {}
     for i, k in enumerate(include_classes):
         target_xform_dict[k] = i

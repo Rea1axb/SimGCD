@@ -596,10 +596,11 @@ def coarse_info_nce_logits(features, prototypes, coarse_logits, temperature=1.0,
     features = F.normalize(features, dim=1)
     prototypes = F.normalize(prototypes, dim=1)
     similarity_matrix = torch.matmul(features, prototypes.T)
-    _, labels = torch.max(coarse_logits, dim=1)
+    confidence, labels = torch.max((coarse_logits / 0.1).softmax(dim=-1), dim=1)
     labels = labels.to(device)
+    confidence = confidence.detach().to(device)
     logits = similarity_matrix / temperature
-    return logits, labels
+    return logits, labels, confidence
 
 def double_coarse_info_nce_logits(coarse_prototypes_1, coarse_prototypes_2, temperature=1.0, device='cuda'):
     coarse_prototypes_1 = F.normalize(coarse_prototypes_1, dim=1)
