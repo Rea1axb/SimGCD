@@ -18,12 +18,12 @@ from util.cluster_and_log_utils import log_accs_from_preds, log_coarse_accs_from
 from util.ema_utils import EMA
 from util.memory_queue_utils import MemoryQueue
 from config import exp_root, dino_pretrain_path, resnet_pretrain_path
-from model import DINOHead, CoarseHead, TwoHead, CoarseFromFineHead, DoubleCoarseHead, info_nce_logits, coarse_info_nce_logits, get_coarse_sup_logits_mean_labels, get_coarse_sup_logits_random_labels, get_coarse_sup_logits_mq_labels, SupConLoss, CoarseSupConLoss, DistillLoss, TCALoss, PrototypesLoss, ContrastiveLearningViewGenerator, FineCoarseContrastiveLearningViewGenerator, get_params_groups
+from model import DINOHead, CoarseHead, TwoHead, CoarseFromFineHead, DoubleCoarseHead, info_nce_logits, coarse_info_nce_logits, get_coarse_sup_logits_mean_labels, get_coarse_sup_logits_random_labels, get_coarse_sup_logits_mq_labels, SupConLoss, CoarseSupConLoss, DistillLoss, TCALoss, PrototypesLoss, ConMeanShiftLoss, ContrastiveLearningViewGenerator, FineCoarseContrastiveLearningViewGenerator, get_params_groups
 
 from vit_model import vision_transformer as vits
 from resnet_model import resnet 
 
-def train(student, train_loader, test_loader, unlabelled_train_loader, args):
+def train(student, train_loader, test_loader, unlabelled_train_loader, train_loader_memory, args):
     params_groups = get_params_groups(student)
     optimizer = SGD(params_groups, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     fp16_scaler = None
@@ -84,6 +84,19 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
     label_same_fine2coarse_w = np.zeros((args.mlp_out_dim, args.coarse_out_dim), dtype=int)
     label_same_coarse2coarse_w = np.zeros((args.coarse_out_dim, args.coarse_out_dim), dtype=int)
     for epoch in range(start_epoch, args.epochs):
+        with torch.no_grad():
+            student.eval()
+            all_feats = []
+            for batch_idx, batch in enumerate(tqdm(train_loader_memory)):
+                if args.use_coarse_label:
+                    images, class_labels, coarse_labels, uq_idxs, mask_lab = batch
+                    coarse_labels = coarse_labels.cuda(non_blocking=True)
+                else:
+                    images, class_labels, uq_idxs, mask_lab = batch
+                images = torch.cat(images, dim=0).cuda(non_blocking=True)
+                features = model(images)
+            all_feats = torch.cat(all_feats)
+
         loss_record = AverageMeter()
         fine_loss_record = AverageMeter()
         coarse_loss_record = AverageMeter()
@@ -564,8 +577,6 @@ if __name__ == "__main__":
             args.coarse_out_dim = 30
         elif args.dataset_name == 'imagenet':
             args.coarse_out_dim = 10
-        elif args.dataset_name == 'imagenet_200':
-            args.coarse_out_dim = 20
     else:
         args.coarse_out_dim = args.coarse_label_num
         args.use_coarse_label = False
@@ -648,6 +659,7 @@ if __name__ == "__main__":
                                         batch_size=256, shuffle=False, pin_memory=False)
     test_loader_labelled = DataLoader(test_dataset, num_workers=args.num_workers,
                                       batch_size=256, shuffle=False, pin_memory=False)
+    train_loader_memory = DataLoader(train_dataset, num_workers=args.num_workers, batch_size=args.batch_size, shuffle=False, drop_last=False)
 
     # ----------------------
     # PROJECTION HEAD
@@ -667,7 +679,7 @@ if __name__ == "__main__":
     # TRAIN
     # ----------------------
     # test(model, test_loader_labelled, epoch=None, save_name='Test ACC', args=args)
-    train(model, train_loader, test_loader_labelled, test_loader_unlabelled, args)
+    train(model, train_loader, test_loader_labelled, test_loader_unlabelled, train_loader_memory, args)
     if args.do_test:
         if args.warmup_model_dir is None:
             raise ValueError('args.warmup_model_dir is None')

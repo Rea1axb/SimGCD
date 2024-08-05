@@ -99,7 +99,7 @@ def get_train_val_indices(train_dataset, val_split=0.2):
 
 
 def get_cifar_10_datasets(train_transform, test_transform, train_classes=(0, 1, 8, 9),
-                       prop_train_labels=0.8, split_train_val=False, seed=0, use_coarse_label=False):
+                       prop_train_labels=0.8, split_train_val=False, seed=0, use_coarse_label=False, args=None):
 
     np.random.seed(seed)
 
@@ -139,7 +139,7 @@ def get_cifar_10_datasets(train_transform, test_transform, train_classes=(0, 1, 
 
 
 def get_cifar_100_datasets(train_transform, test_transform, train_classes=range(80),
-                       prop_train_labels=0.8, split_train_val=False, seed=0, use_coarse_label=False):
+                       prop_train_labels=0.8, split_train_val=False, seed=0, use_coarse_label=False, args=None):
 
     np.random.seed(seed)
 
@@ -178,7 +178,7 @@ def get_cifar_100_datasets(train_transform, test_transform, train_classes=range(
     return all_datasets
 
 def get_cifar_100_small_datasets(train_transform, test_transform, train_classes=range(80),
-                       prop_train_labels=0.8, split_train_val=False, seed=0, use_coarse_label=False, prop_small=0.25):
+                       prop_train_labels=0.8, split_train_val=False, seed=0, use_coarse_label=False, prop_small=0.25, args=None):
 
     np.random.seed(seed)
 

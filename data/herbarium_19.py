@@ -81,7 +81,7 @@ def get_train_val_indices(train_dataset, val_instances_per_class=5):
 
 
 def get_herbarium_datasets(train_transform, test_transform, train_classes=range(500), prop_train_labels=0.8,
-                            seed=0, split_train_val=False, use_coarse_label=False):
+                            seed=0, split_train_val=False, use_coarse_label=False, args=None):
 
     np.random.seed(seed)
 

@@ -181,8 +181,9 @@ class CoarseFromFineHead(nn.Module):
 
 class DoubleCoarseHead(nn.Module):
     def __init__(self, in_dim, out_dim_fine, out_dim_coarse, use_bn=False, norm_last_layer=True,
-                 mlp_nlayers=3, hidden_dim=2048, bottleneck_dim=256, attn_head=1):
+                 mlp_nlayers=3, hidden_dim=2048, bottleneck_dim=256, attn_head=1, double_transform=False):
         super(DoubleCoarseHead, self).__init__()
+        self.double_transform = double_transform
         nlayers = max(mlp_nlayers, 1)
         if nlayers == 1:
             self.mlp = nn.Linear(in_dim, bottleneck_dim)
@@ -224,9 +225,21 @@ class DoubleCoarseHead(nn.Module):
                 nn.init.constant_(m.bias, 0)
     
     def forward(self, input_x):
-        x = input_x[0]
-        # last_x = input_x[1]
-        last_x = input_x[0]
+        '''
+        input_x[0]: output of 12nd Block
+        input_x[1]: output of 11st Block
+
+        '''
+        if self.double_transform:
+            if self.training:
+                x, last_x = input_x[0].chunk(2)
+            else:
+                x = input_x[0]
+                last_x = input_x[0]
+        else:
+            x = input_x[0]
+            # last_x = input_x[1]
+            last_x = input_x[0]
         x_proj = self.mlp(x)
         x_pred = self.predictor(x)
         x = nn.functional.normalize(x, dim=-1, p=2)
@@ -384,6 +397,15 @@ class ContrastiveLearningViewGenerator(object):
             return [self.base_transform(x) for i in range(self.n_views)]
         else:
             return [self.base_transform[i](x) for i in range(self.n_views)]
+
+class FineCoarseContrastiveLearningViewGenerator(object):
+    def __init__(self, fine_transform, coarse_transform, n_views=2):
+        self.fine_transform = fine_transform
+        self.coarse_transform = coarse_transform
+        self.n_views = n_views
+    
+    def __call__(self, x):
+        return [self.fine_transform(x) for i in range(self.n_views)] + [self.coarse_transform(x) for i in range(self.n_views)]
 
 class CoarseSupConLoss(torch.nn.Module):
     """Supervised Contrastive Learning: https://arxiv.org/pdf/2004.11362.pdf.
@@ -710,6 +732,43 @@ class PrototypesLoss(nn.Module):
         loss = torch.sum(similarity_matrix * mask) / mask.sum()
         return loss
 
+class ConMeanShiftLoss(nn.Module):
+    def __init__(self, args):
+        super(ConMeanShiftLoss, self).__init__()
+        self.n_views = args.n_views
+        self.alpha = args.alpha
+        self.temperature = args.temperature
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    def forward(self, mean_emb, features):        
+        batch_size = int(features.size(0)) // self.n_views
+        positive_mask = torch.eye(batch_size, dtype=torch.float32).to(self.device)
+        positive_mask = positive_mask.repeat(self.n_views, self.n_views)
+        negative_mask = torch.ones_like(positive_mask)
+        negative_mask[positive_mask>0] = 0
+        self_mask = torch.eye(batch_size * self.n_views, dtype=torch.float32).to(self.device)
+        positive_mask[self_mask>0] = 0
+
+        #compute logits
+        meanshift_feat = (1-self.alpha) * features + self.alpha * mean_emb
+        norm = torch.sqrt(torch.sum((torch.pow(meanshift_feat, 2)), dim=-1)).unsqueeze(1).detach()
+        meanshift_feat = meanshift_feat / norm
+
+        anchor_dot_contrast = torch.div(torch.matmul(meanshift_feat, meanshift_feat.T), self.temperature)
+
+        # for numerical stability
+        logits_max, _ = torch.max(anchor_dot_contrast, dim=1, keepdim=True)
+        logits = anchor_dot_contrast - logits_max.detach()
+
+        # compute log_prob
+        exp_logits = torch.exp(logits) * negative_mask
+        log_prob = logits - torch.log(exp_logits.sum(1, keepdim=True))        
+
+        # compute mean of log-likelihood over positive
+        loss = - ((positive_mask * log_prob).sum(1) / positive_mask.sum(1))
+        loss = loss.view(self.n_views, batch_size).mean()
+
+        return loss
 
 if __name__ == "__main__":
     in_dim = 768

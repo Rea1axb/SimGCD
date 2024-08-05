@@ -132,12 +132,13 @@ class ResNet(nn.Module):
         out = F.relu(self.bn1(self.conv1(x)))
         out = self.layer1(out)
         out = self.layer2(out)
+        # out3 = self.layer3(out).detach() # [b, 256, 8, 8]
         out3 = self.layer3(out).detach() # [b, 256, 8, 8]
         out = self.layer4(out3) # [b, 512, 4, 4]
         out = self.avgpool(out) # [b, 512, 1, 1]
         out = torch.flatten(out, 1)
         out = self.projector(out)
-        return out
+        return out, out3
 
 
 def resnet18(**kwargs):

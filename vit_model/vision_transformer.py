@@ -214,6 +214,7 @@ class VisionTransformer(nn.Module):
         for blk in self.blocks:
             last_x = x
             x = blk(x)
+        last_x = self.norm(last_x)
         x = self.norm(x)
 
         if return_all_patches:
