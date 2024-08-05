@@ -130,8 +130,8 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 coarse_sup_logits = torch.cat([f[mask_lab] for f in student_coarse_out.chunk(2)], dim=0)
                 ## coarse sup clustering
                 coarse_teacher_sup_logits = torch.cat([f[mask_lab] for f in teacher_coarse_out.chunk(2)], dim=0)
-                coarse_sup_logits_labels = get_coarse_sup_logits_mean_labels(teacher_coarse_logits=coarse_teacher_sup_logits, fine_labels=sup_labels, fine_out_dim=args.mlp_out_dim)
-                # coarse_sup_logits_labels = get_coarse_sup_logits_random_labels(teacher_coarse_logits=coarse_teacher_sup_logits, fine_labels=sup_labels, fine_out_dim=args.mlp_out_dim)
+                # coarse_sup_logits_labels = get_coarse_sup_logits_mean_labels(teacher_coarse_logits=coarse_teacher_sup_logits, fine_labels=sup_labels, fine_out_dim=args.mlp_out_dim)
+                coarse_sup_logits_labels = get_coarse_sup_logits_random_labels(teacher_coarse_logits=coarse_teacher_sup_logits, fine_labels=sup_labels, fine_out_dim=args.mlp_out_dim)
                 coarse_sup_cls_loss = cluster_criterion(coarse_sup_logits, coarse_sup_logits_labels, epoch)
                 ## tca
                 coarse_cls_loss = TCALoss()(coarse_logits=coarse_sup_logits, fine_labels=sup_labels, coarse_prototypes=coarse_prototypes, fine_prototypes=fine_prototypes)

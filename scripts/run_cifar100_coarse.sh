@@ -3,7 +3,7 @@
 set -e
 set -x
 
-CUDA_VISIBLE_DEVICES=2 python train_with_coarse.py \
+CUDA_VISIBLE_DEVICES=3 python train_with_coarse.py \
     --dataset_name 'cifar100' \
     --setting 'default' \
     --batch_size 256 \
@@ -29,7 +29,7 @@ CUDA_VISIBLE_DEVICES=2 python train_with_coarse.py \
     --cooloff_coarse_weight_end_epoch 150 \
     --cooloff_coarse_weight 0.2 \
     --use_coarse_label \
-    --exp_name 'cifar100_default_twohead(SuperclsrandomClusterContrastiveSupcontrastiveCoarse)_weight(warmup_30-60_0.0-0.5_cooloff_120-150_0.5-0.2)_fineweight(dynamic)'
+    --exp_name 'cifar100_default_twohead(SuperclsClusterContrastiveSupcontrastiveCoarse)_weight(warmup_30-60_0.0-0.5_cooloff_120-150_0.5-0.2)_fineweight(dynamic)_SEED2'
 
 # CUDA_VISIBLE_DEVICES=3 python train.py \
 #     --dataset_name 'cifar100' \
