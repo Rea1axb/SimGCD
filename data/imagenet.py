@@ -11,7 +11,7 @@ from config import imagenet_root, imagenet_200_root
 
 class ImageNetBase(torchvision.datasets.ImageFolder):
 
-    def __init__(self, root, transform, use_coarse_label=False, class_num=100, data_path='/home/czq/data/imagenet100_small'):
+    def __init__(self, root, transform, use_coarse_label=False, class_num=100, data_path='../../../data/imagenet100_small'):
 
         super(ImageNetBase, self).__init__(root, transform)
 

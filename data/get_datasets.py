@@ -152,8 +152,23 @@ def get_class_splits(args):
     elif args.dataset_name == 'imagenet':
 
         args.image_size = 224
-        args.train_classes = range(50)
-        args.unlabeled_classes = range(50, 100)
+        if args.setting == 'default':
+            args.train_classes = range(50)
+            args.unlabeled_classes = range(50, 100)
+        elif args.setting == '30new':
+            args.train_classes = range(30)
+            args.unlabeled_classes = range(30, 100)
+        elif args.setting == '10new':
+            args.train_classes = range(10)
+            args.unlabeled_classes = range(10, 100)
+        elif args.setting == '70new':
+            args.train_classes = range(70)
+            args.unlabeled_classes = range(70, 100)
+        elif args.setting == '90new':
+            args.train_classes = range(90)
+            args.unlabeled_classes = range(90, 100)
+        else:
+            raise NotImplementedError
 
     elif args.dataset_name == 'imagenet_200':
 
@@ -164,8 +179,23 @@ def get_class_splits(args):
     elif args.dataset_name == 'imagenet_100':
 
         args.image_size = 224
-        args.train_classes = range(50)
-        args.unlabeled_classes = range(50, 100)
+        if args.setting == 'default':
+            args.train_classes = range(50)
+            args.unlabeled_classes = range(50, 100)
+        elif args.setting == '30new':
+            args.train_classes = range(30)
+            args.unlabeled_classes = range(30, 100)
+        elif args.setting == '10new':
+            args.train_classes = range(10)
+            args.unlabeled_classes = range(10, 100)
+        elif args.setting == '70new':
+            args.train_classes = range(70)
+            args.unlabeled_classes = range(70, 100)
+        elif args.setting == '90new':
+            args.train_classes = range(90)
+            args.unlabeled_classes = range(90, 100)
+        else:
+            raise NotImplementedError
 
     elif args.dataset_name == 'imagenet_1k':
 

@@ -43,11 +43,11 @@ def get_cifar100_coarse_labels_dict():
     return coarse_labels_dict
 
 def get_imagenet_coarse_labels(fine_labels):
-    get_coarse_label = np.load('/home/czq/data/imagenet100_small/get_coarse_labels.npy')
+    get_coarse_label = np.load('../../../data/imagenet100_small/get_coarse_labels.npy')
     return get_coarse_label[fine_labels]
 
 def get_imagenet200_coarse_labels(fine_labels):
-    get_coarse_label = np.load('/home/czq/data/imagenet200_small/get_coarse_labels.npy')
+    get_coarse_label = np.load('../../../data/imagenet200_small/get_coarse_labels.npy')
     return get_coarse_label[fine_labels]
 
 class MergedDataset(Dataset):

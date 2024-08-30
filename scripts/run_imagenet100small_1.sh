@@ -23,10 +23,10 @@ set -x
 #     --coarse_cluster_weight 0.25 \
 #     --exp_name cifar100_simgcd_default_coarsecluster0.25
 
-CUDA_VISIBLE_DEVICES=3 python train_with_coarse.py \
+CUDA_VISIBLE_DEVICES=1 python train_with_coarse.py \
     --dataset_name 'imagenet' \
-    --coarse_label_num 20 \
-    --setting 'default' \
+    --coarse_label_num 10 \
+    --setting '10new' \
     --batch_size 256 \
     --grad_from_block 11 \
     --epochs 200 \
@@ -57,7 +57,7 @@ CUDA_VISIBLE_DEVICES=3 python train_with_coarse.py \
     --mq_query_mode 'soft' \
     --mq_maxsize 1024 \
     --use_prototypes_attention 'False' \
-    --exp_name 'imagenet_default_twohead(DoubleCoarseClusterContrastiveSupcontrastiveCoarse)_coarsenum(20)_weight(warmup_30-60_0.0-0.5_cooloff_120-150_0.5-0.5)_dcweight(0.0-0.5)_fineweight(dynamic)_batchsz(256)'
+    --exp_name 'imagenet_10new_twohead(DoubleCoarseClusterContrastiveSupcontrastiveCoarse)_coarsenum(10)_weight(warmup_30-60_0.0-0.5_cooloff_120-150_0.5-0.5)_dcweight(0.0-0.5)_fineweight(dynamic)_batchsz(256)'
 # CUDA_VISIBLE_DEVICES=3 python train.py \
 #     --dataset_name 'cifar100' \
 #     --setting 'default' \
