@@ -58,6 +58,7 @@ CUDA_VISIBLE_DEVICES=3 python train_with_coarse.py \
     --mq_query_mode 'soft' \
     --mq_maxsize 1024 \
     --use_prototypes_attention 'False' \
+    --use_prototypes_loss 'False' \
     --exp_name 'imagenet200_default_simgcd(DoubleCoarseClusterContrastiveSupcontrastiveCoarse)_coarsenum(20)_weight(warmup_30-60_0.0-0.0_cooloff_120-150_0.0-0.0)_dcweight(0.0-0.0)_fineweight(dynamic)_batchsz(256)'
 # CUDA_VISIBLE_DEVICES=3 python train.py \
 #     --dataset_name 'cifar100' \

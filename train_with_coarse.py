@@ -242,7 +242,11 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 pstr += f'double_coarse_loss: {double_coarse_loss.item():.4f} '
 
                 fine_loss = 0.
-                fine_loss = args.sup_weight * (cls_loss + sup_con_loss) + (1 - args.sup_weight) * (cluster_loss + contrastive_loss + fine_prototypes_loss)
+                if args.use_prototypes_loss:
+                    fine_loss = args.sup_weight * (cls_loss + sup_con_loss) + (1 - args.sup_weight) * (cluster_loss + contrastive_loss + fine_prototypes_loss)
+                else:
+                    fine_loss = args.sup_weight * (cls_loss + sup_con_loss) + (1 - args.sup_weight) * (cluster_loss + contrastive_loss)
+
                 coarse_loss = 0.
                 # NOTE: ClsClusterContrastiveSupcontrastive
                 # coarse_loss = args.sup_weight * (coarse_cls_loss + coarse_sup_con_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
@@ -266,7 +270,10 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
                 # NOTE: DoublecoarsePrototypesSupclsClusterContrastiveSupcontrastive
                 # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss + doublecoarse_weight_schedule[epoch] * double_coarse_loss)
-                coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
+                if args.use_prototypes_loss:
+                    coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
+                else:
+                    coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
                 # NOTE: GtDoublecoarsePrototypesSupclsClusterContrastiveSupcontrastive
                 # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss + coarse_gt_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
                 # NOTE: DoublecoarsePrototypesSupclsClusterContrastiveSupcontrastive + W_entropy_loss
@@ -523,6 +530,7 @@ if __name__ == "__main__":
     parser.add_argument('--cooloff_coarse_weight_end_epoch', type=int, default=30, help='end epoch of linear cooloff')
     parser.add_argument('--cooloff_coarse_weight', type=float, default=2.0, help='Initial value for coarse_weight')
     parser.add_argument('--dc_weight', type=float, default=0.5)
+    parser.add_argument('--use_prototypes_loss', type=str2bool, default=True)
     
 
     parser.add_argument('--do_test', type=str2bool, default=False)
