@@ -1,3 +1,4 @@
+import numpy as np
 import os
 import torch
 import inspect
@@ -130,3 +131,30 @@ class DistributedWeightedSampler(torch.utils.data.distributed.DistributedSampler
 
     def __len__(self):
         return self.num_samples
+    
+def compute_weights(t_values, T_start, T_end, lambda_final):
+    """
+    Compute weights for a given array of time steps t_values based on the specified function.
+
+    Parameters:
+        t_values (numpy.ndarray): Array of time steps t.
+        T_start (float): Start time for the cosine function.
+        T_end (float): End time for the cosine function.
+        lambda_final (float): Scaling factor for the weight function.
+
+    Returns:
+        numpy.ndarray: Array of weights f_c(t).
+    """
+    weights = np.zeros_like(t_values, dtype=float)
+
+    # Case 2: T_start ≤ t < T_end
+    mask_cosine = (t_values >= T_start) & (t_values < T_end)
+    weights[mask_cosine] = (
+        (lambda_final / 2) * (1 - np.cos(((t_values[mask_cosine] - T_start) / (T_end - T_start)) * np.pi))
+    )
+
+    # Case 3: t ≥ T_end
+    mask_constant = t_values >= T_end
+    weights[mask_constant] = lambda_final
+
+    return weights
