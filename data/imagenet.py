@@ -6,7 +6,7 @@ import os
 
 from copy import deepcopy
 from data.data_utils import subsample_instances
-from config import imagenet_root, imagenet_200_root
+from config import imagenet_root, imagenet_200_root, imagenet_10_root
 
 
 class ImageNetBase(torchvision.datasets.ImageFolder):
@@ -192,6 +192,56 @@ def get_imagenet_200_datasets(train_transform, test_transform, train_classes=ran
     }
 
     return all_datasets
+
+def get_imagenet_10_datasets(train_transform, test_transform, train_classes=range(5),
+                          prop_train_labels=0.8, split_train_val=False, seed=0, use_coarse_label=False, args=None):
+    np.random.seed(seed)
+
+    whole_training_set = ImageNetBase(root=os.path.join(imagenet_10_root, 'train'), transform=train_transform, use_coarse_label=use_coarse_label, class_num=10, data_path=imagenet_10_root)
+
+    # Reset dataset
+    # whole_training_set.samples = [(s[0], cls_map[s[1]]) for s in whole_training_set.samples]
+    # whole_training_set.targets = [s[1] for s in whole_training_set.samples]
+    # whole_training_set.uq_idxs = np.array(range(len(whole_training_set)))
+    # whole_training_set.target_transform = None
+
+    # Get labelled training set which has subsampled classes, then subsample some indices from that
+    train_dataset_labelled = subsample_classes(deepcopy(whole_training_set), include_classes=train_classes)
+    subsample_indices = subsample_instances(train_dataset_labelled, prop_indices_to_subsample=prop_train_labels)
+    train_dataset_labelled = subsample_dataset(train_dataset_labelled, subsample_indices)
+
+    # Split into training and validation sets
+    train_idxs, val_idxs = get_train_val_indices(train_dataset_labelled)
+    train_dataset_labelled_split = subsample_dataset(deepcopy(train_dataset_labelled), train_idxs)
+    val_dataset_labelled_split = subsample_dataset(deepcopy(train_dataset_labelled), val_idxs)
+    val_dataset_labelled_split.transform = test_transform
+
+    # Get unlabelled data
+    unlabelled_indices = set(whole_training_set.uq_idxs) - set(train_dataset_labelled.uq_idxs)
+    train_dataset_unlabelled = subsample_dataset(deepcopy(whole_training_set), np.array(list(unlabelled_indices)))
+
+    # Get test set for all classes
+    test_dataset = ImageNetBase(root=os.path.join(imagenet_10_root, 'val'), transform=test_transform, use_coarse_label=use_coarse_label, class_num=10, data_path=imagenet_10_root)
+
+    # Reset test set
+    # test_dataset.samples = [(s[0], cls_map[s[1]]) for s in test_dataset.samples]
+    # test_dataset.targets = [s[1] for s in test_dataset.samples]
+    # test_dataset.uq_idxs = np.array(range(len(test_dataset)))
+    # test_dataset.target_transform = None
+
+    # Either split train into train and val or use test set as val
+    train_dataset_labelled = train_dataset_labelled_split if split_train_val else train_dataset_labelled
+    val_dataset_labelled = val_dataset_labelled_split if split_train_val else None
+
+    all_datasets = {
+        'train_labelled': train_dataset_labelled,
+        'train_unlabelled': train_dataset_unlabelled,
+        'val': val_dataset_labelled,
+        'test': test_dataset,
+    }
+
+    return all_datasets
+
 
 def get_imagenet_100_datasets(train_transform, test_transform, train_classes=range(80),
                            prop_train_labels=0.8, split_train_val=False, seed=0, args=None):

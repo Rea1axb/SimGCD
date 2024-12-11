@@ -3,7 +3,7 @@ import torch.distributed as dist
 import numpy as np
 from scipy.optimize import linear_sum_assignment as linear_assignment
 
-from data.data_utils import get_cifar100_coarse_labels, get_imagenet_coarse_labels, get_imagenet200_coarse_labels
+from data.data_utils import get_cifar100_coarse_labels, get_imagenet_coarse_labels, get_imagenet200_coarse_labels, get_imagenet10_coarse_labels
 
 def all_sum_item(item):
     item = torch.tensor(item).cuda()
@@ -13,7 +13,8 @@ def all_sum_item(item):
 get_coarse_labels_funcs = {
     'cifar100': get_cifar100_coarse_labels,
     'imagenet': get_imagenet_coarse_labels,
-    'imagenet_200': get_imagenet200_coarse_labels
+    'imagenet_200': get_imagenet200_coarse_labels,
+    'imagenet_10': get_imagenet10_coarse_labels
 }
 
 def add_to_label_same_w(label_same_fine2coarse_w, label_same_coarse2coarse_w, y_true, coarse_y_pred, dataset_name):
@@ -294,6 +295,8 @@ def log_target2coarse_accs(preds, ind, coarse_preds, coarse_ind, coarse_targets,
         ind_target2coarse_map = {i:get_imagenet_coarse_labels(j) for i, j in ind}
     elif args.dataset_name == 'imagenet_200':
         ind_target2coarse_map = {i:get_imagenet200_coarse_labels(j) for i, j in ind}
+    elif args.dataset_name == 'imagenet_10':
+        ind_target2coarse_map = {i:get_imagenet10_coarse_labels(j) for i, j in ind}
     else:
         ind_target2coarse_map = {i:j for i, j in ind}
     target2coarse_preds = np.vectorize(ind_target2coarse_map.get)(preds)

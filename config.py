@@ -9,6 +9,7 @@ car_root = '../../../data/stanford_cars'
 herbarium_dataroot = '../../../data/herbarium_19'
 imagenet_root = '../../../data/imagenet100_small'
 imagenet_200_root = '../../../data/imagenet200_small'
+imagenet_10_root = '../../../data/imagenet10_small'
 
 # OSR Split dir
 osr_split_dir = 'data/ssb_splits'
