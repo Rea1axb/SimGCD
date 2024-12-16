@@ -14,13 +14,13 @@ from data.stanford_cars import CarsDataset
 from data.cifar import CustomCIFAR10, CustomCIFAR100, cifar_10_root, cifar_100_root, get_cifar_100_small_datasets
 from data.herbarium_19 import HerbariumDataset19, herbarium_dataroot
 from data.augmentations import get_transform
-from data.imagenet import get_imagenet_100_datasets
+from data.imagenet import get_imagenet_100_datasets, get_imagenet_10_datasets, get_imagenet_200_datasets, get_imagenet_datasets
 from data.data_utils import MergedDataset
 from data.cub import CustomCub2011, cub_root
 from data.fgvc_aircraft import FGVCAircraft, aircraft_root
 
 from vit_model import vision_transformer as vits
-from model import TwoHead, DoubleCoarseHead
+from model import TwoHead, DoubleCoarseHead, DINOHead
 
 # from project_utils.general_utils import strip_state_dict, str2bool
 from copy import deepcopy
@@ -180,6 +180,54 @@ if __name__ == "__main__":
         test_dataset = datasets['test']
         targets = list(set(test_dataset.targets))
 
+    elif args.dataset == 'imagenet200':
+        datasets = get_imagenet_200_datasets(train_transform=val_transform, test_transform=val_transform,
+                                             train_classes=range(100),
+                                             prop_train_labels=0.5)
+        datasets['train_labelled'].target_transform = None
+        datasets['train_unlabelled'].target_transform = None
+
+        train_dataset = MergedDataset(labelled_dataset=deepcopy(datasets['train_labelled']),
+                                      unlabelled_dataset=deepcopy(datasets['train_unlabelled'])
+                                      )
+
+        test_dataset = datasets['test']
+        targets = list(set(test_dataset.targets))
+        args.coarse_out_dim = 20
+        args.mlp_out_dim = 200
+
+    elif args.dataset == 'imagenet':
+        datasets = get_imagenet_datasets(train_transform=val_transform, test_transform=val_transform,
+                                         train_classes=range(50),
+                                         prop_train_labels=0.5)
+        datasets['train_labelled'].target_transform = None
+        datasets['train_unlabelled'].target_transform = None
+
+        train_dataset = MergedDataset(labelled_dataset=deepcopy(datasets['train_labelled']),
+                                      unlabelled_dataset=deepcopy(datasets['train_unlabelled'])
+                                      )
+
+        test_dataset = datasets['test']
+        targets = list(set(test_dataset.targets))
+        args.coarse_out_dim = 10
+        args.mlp_out_dim = 100
+
+    elif args.dataset == 'imagenet10':
+        datasets = get_imagenet_10_datasets(train_transform=val_transform, test_transform=val_transform,
+                                             train_classes=[0, 1, 4, 5, 7],
+                                             prop_train_labels=0.5)
+        datasets['train_labelled'].target_transform = None
+        datasets['train_unlabelled'].target_transform = None
+
+        train_dataset = MergedDataset(labelled_dataset=deepcopy(datasets['train_labelled']),
+                                      unlabelled_dataset=deepcopy(datasets['train_unlabelled'])
+                                      )
+
+        test_dataset = datasets['test']
+        targets = list(set(test_dataset.targets))
+        args.coarse_out_dim = 3
+        args.mlp_out_dim = 10
+
     elif args.dataset == 'cub':
 
         train_dataset = CustomCub2011(root=cub_root, transform=val_transform, train=True)
@@ -218,6 +266,18 @@ if __name__ == "__main__":
         args.image_size = 224
         args.num_mlp_layers = 3
         backbone = vits.__dict__['vit_base']()
+        projector = DoubleCoarseHead(in_dim=args.feat_dim, out_dim_fine=args.mlp_out_dim, out_dim_coarse=args.coarse_out_dim, mlp_nlayers=args.num_mlp_layers)
+        model = nn.Sequential(OrderedDict([
+            ('backbone', backbone),
+            ('projector', projector)
+        ]))
+    elif args.model_name == 'simgcd':
+        extract_features_func = extract_features_dino
+        args.feat_dim = 768
+        args.image_size = 224
+        args.num_mlp_layers = 3
+        backbone = vits.__dict__['vit_base']()
+        # projector = DINOHead(in_dim=args.feat_dim, out_dim=args.mlp_out_dim, nlayers=args.num_mlp_layers)
         projector = DoubleCoarseHead(in_dim=args.feat_dim, out_dim_fine=args.mlp_out_dim, out_dim_coarse=args.coarse_out_dim, mlp_nlayers=args.num_mlp_layers)
         model = nn.Sequential(OrderedDict([
             ('backbone', backbone),

@@ -13,7 +13,7 @@ from tqdm import tqdm
 from data.augmentations import get_transform
 from data.get_datasets import get_datasets, get_class_splits
 
-from util.general_utils import AverageMeter, init_experiment, get_mean_lr, str2bool
+from util.general_utils import AverageMeter, init_experiment, get_mean_lr, str2bool, compute_weights
 from util.cluster_and_log_utils import log_accs_from_preds, log_coarse_accs_from_preds, cluster_acc, log_target2coarse_accs, add_to_label_same_w
 from util.ema_utils import EMA
 from util.memory_queue_utils import MemoryQueue
@@ -63,20 +63,32 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
     #                 args.coarse_weight, args.warmup_coarse_weight_epochs),
     #     np.ones(args.epochs - args.warmup_coarse_weight_epochs) * args.coarse_weight
     # ))
-    coarse_weight_schedule = np.concatenate((
-        np.ones(args.warmup_coarse_weight_start_epoch) * args.warmup_coarse_weight,
-        np.linspace(args.warmup_coarse_weight,
-                    args.coarse_weight, args.warmup_coarse_weight_end_epoch - args.warmup_coarse_weight_start_epoch),
-        np.ones(args.cooloff_coarse_weight_start_epoch - args.warmup_coarse_weight_end_epoch) * args.coarse_weight,
-        np.linspace(args.coarse_weight,
-                    args.cooloff_coarse_weight, args.cooloff_coarse_weight_end_epoch - args.cooloff_coarse_weight_start_epoch),
-        np.ones(args.epochs - args.cooloff_coarse_weight_end_epoch) * args.cooloff_coarse_weight
-    ))
-    doublecoarse_weight_schedule = np.concatenate((
-        np.ones(args.cooloff_coarse_weight_start_epoch) * 0.,
-        np.linspace(0., args.dc_weight, args.cooloff_coarse_weight_end_epoch - args.cooloff_coarse_weight_start_epoch),
-        np.ones(args.epochs - args.cooloff_coarse_weight_end_epoch) * args.dc_weight
-    ))
+    coarse_weight_schedule = compute_weights(
+        t_values=np.linspace(0, args.epochs, args.epochs),
+        T_start=args.warmup_coarse_weight_start_epoch,
+        T_end=args.warmup_coarse_weight_end_epoch,
+        lambda_final=args.coarse_weight
+    )
+    doublecoarse_weight_schedule = compute_weights(
+        t_values=np.linspace(0, args.epochs, args.epochs),
+        T_start=args.cooloff_coarse_weight_start_epoch,
+        T_end=args.cooloff_coarse_weight_end_epoch,
+        lambda_final=args.cooloff_coarse_weight
+    )
+    # coarse_weight_schedule = np.concatenate((
+    #     np.ones(args.warmup_coarse_weight_start_epoch) * args.warmup_coarse_weight,
+    #     np.linspace(args.warmup_coarse_weight,
+    #                 args.coarse_weight, args.warmup_coarse_weight_end_epoch - args.warmup_coarse_weight_start_epoch),
+    #     np.ones(args.cooloff_coarse_weight_start_epoch - args.warmup_coarse_weight_end_epoch) * args.coarse_weight,
+    #     np.linspace(args.coarse_weight,
+    #                 args.cooloff_coarse_weight, args.cooloff_coarse_weight_end_epoch - args.cooloff_coarse_weight_start_epoch),
+    #     np.ones(args.epochs - args.cooloff_coarse_weight_end_epoch) * args.cooloff_coarse_weight
+    # ))
+    # doublecoarse_weight_schedule = np.concatenate((
+    #     np.ones(args.cooloff_coarse_weight_start_epoch) * 0.,
+    #     np.linspace(0., args.dc_weight, args.cooloff_coarse_weight_end_epoch - args.cooloff_coarse_weight_start_epoch),
+    #     np.ones(args.epochs - args.cooloff_coarse_weight_end_epoch) * args.dc_weight
+    # ))
 
     if args.use_memory_queue:
         memory_queue = MemoryQueue(max_size=args.mq_maxsize, fine_label_num=args.mlp_out_dim, coarse_label_num=args.coarse_out_dim)
@@ -574,6 +586,8 @@ if __name__ == "__main__":
             args.coarse_out_dim = 10
         elif args.dataset_name == 'imagenet_200':
             args.coarse_out_dim = 20
+        elif args.dataset_name == 'imagenet_10':
+            args.coarse_out_dim = 3
     else:
         args.coarse_out_dim = args.coarse_label_num
         args.use_coarse_label = False

@@ -3,7 +3,7 @@ from data.data_utils import MergedDataset, get_cifar100_coarse_labels_dict
 from data.cifar import get_cifar_10_datasets, get_cifar_100_datasets, get_cifar_100_small_datasets
 from data.herbarium_19 import get_herbarium_datasets
 from data.stanford_cars import get_scars_datasets
-from data.imagenet import get_imagenet_100_datasets, get_imagenet_1k_datasets, get_imagenet_datasets, get_imagenet_200_datasets
+from data.imagenet import get_imagenet_100_datasets, get_imagenet_1k_datasets, get_imagenet_datasets, get_imagenet_200_datasets, get_imagenet_10_datasets
 from data.cub import get_cub_datasets
 from data.fgvc_aircraft import get_aircraft_datasets
 
@@ -20,6 +20,7 @@ get_dataset_funcs = {
     'cifar100small': get_cifar_100_small_datasets,
     'imagenet': get_imagenet_datasets,
     'imagenet_200': get_imagenet_200_datasets,
+    'imagenet_10': get_imagenet_10_datasets,
     'imagenet_100': get_imagenet_100_datasets,
     'imagenet_1k': get_imagenet_1k_datasets,
     'herbarium_19': get_herbarium_datasets,
@@ -47,7 +48,7 @@ def get_datasets(dataset_name, train_transform, test_transform, args):
     datasets = get_dataset_f(train_transform=train_transform, test_transform=test_transform,
                             train_classes=args.train_classes,
                             prop_train_labels=args.prop_train_labels,
-                            split_train_val=False,
+                            split_train_val=True,
                             use_coarse_label=args.use_coarse_label, args=args)
     # Set target transforms:
     target_transform_dict = {}
@@ -175,6 +176,13 @@ def get_class_splits(args):
         args.image_size = 224
         args.train_classes = range(100)
         args.unlabeled_classes = range(100, 200)
+
+    elif args.dataset_name == 'imagenet_10':
+
+        args.image_size = 224
+        if args.setting == 'default':
+            args.train_classes = [0, 1, 4, 5, 7]
+            args.unlabeled_classes = [2, 3, 6, 8, 9]
 
     elif args.dataset_name == 'imagenet_100':
 
