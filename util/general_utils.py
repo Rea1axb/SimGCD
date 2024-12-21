@@ -91,6 +91,39 @@ def init_experiment(args, runner_name=None, exp_id=None):
 
     return args
 
+def sample_based_on_distance(distances, num_samples=10):
+    """
+    根据样本到原型的距离进行采样。
+
+    :param distances: Tensor (batch_size, num_prototypes)，样本到原型的距离。
+    :param num_samples: int,最终采样的样本数量。
+    :return: List[int]，采样的索引。
+    """
+    # Step 1: 计算距离的统计量
+    min_distances, _ = torch.min(distances, dim=1)  # 到最近原型的距离
+    mean_distance = torch.mean(min_distances)      # 距离均值
+
+    # Step 2: 定义采样权重规则
+    weights = torch.ones_like(min_distances)
+
+    # (1) 距离较近的样本（靠近原型）
+    close_mask = min_distances <= mean_distance * 0.25
+    weights[close_mask] += 1.0  # 权重增加
+
+    # (2) 距离在分类边界上的样本（接近均值）
+    boundary_mask = (min_distances > mean_distance * 0.8) & (min_distances <= mean_distance * 1.2)
+    weights[boundary_mask] += 1.0
+
+    # (3) 距离较远的样本（远离原型）
+    far_mask = min_distances > mean_distance * 1.5
+    weights[far_mask] += 1.0
+
+    # Step 3: 按权重进行采样
+    weights = weights / torch.sum(weights)  # 归一化权重
+    sampled_indices = torch.multinomial(weights, num_samples, replacement=False)
+
+    return sampled_indices.tolist()
+
 def get_mean_lr(optimizer):
     return torch.mean(torch.Tensor([param_group['lr'] for param_group in optimizer.param_groups])).item()
 
