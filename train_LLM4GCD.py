@@ -11,7 +11,7 @@ from tqdm import tqdm
 from data.augmentations import get_transform
 from data.get_datasets import get_datasets, get_class_splits
 
-from util.general_utils import AverageMeter, init_experiment, get_mean_lr, sample_based_on_distance
+from util.general_utils import AverageMeter, init_experiment, get_mean_lr, three_stage_sampling
 from util.cluster_and_log_utils import log_accs_from_preds
 from util.ema_utils import EMA
 from config import exp_root, dino_pretrain_path, clip_pretrain_path
@@ -49,7 +49,10 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
     # best_train_acc_lab = 0
     # best_train_acc_ubl = 0 
     # best_train_acc_all = 0
-
+    all_distances = []
+    all_imgs = []
+    all_class_labels = []
+    all_mask_lab = []
 
     for epoch in range(args.epochs):
         loss_record = AverageMeter()
@@ -116,13 +119,13 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
             sup_con_loss_record.update(sup_con_loss.item(), class_labels.size(0))
             contrastive_loss_record.update(contrastive_loss.item(), class_labels.size(0))
 
-            # TODO sample_based_on_distance
-            with torch.no_grad():
-                sample_index = sample_based_on_distance(teacher_out, 5)
-                sample_imgs = images[sample_index]
-                sample_class_labels = class_labels[sample_index]
-                sample_uq_idxs = uq_idxs[sample_index]
-                sample_mask_lab = mask_lab[sample_index]
+            # TODO sample_based_on_distance\
+            if (epoch + 1) % args.query_freq == 0:
+                with torch.no_grad():
+                    all_distances.append(teacher_out.detach().cpu())
+                    all_imgs.append(images.detach().cpu())
+                    all_class_labels.append(class_labels)
+                    all_mask_lab.append(mask_lab)
 
 
 
@@ -190,6 +193,21 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
         # 
         # args.logger.info(f'Exp Name: {args.exp_name}')
         # args.logger.info(f'Metrics with best model on test set: All: {best_train_acc_all:.4f} Old: {best_train_acc_lab:.4f} New: {best_train_acc_ubl:.4f}')
+        if (epoch + 1) % args.query_freq == 0:
+            all_distances = torch.cat(all_distances, dim=0)
+            all_imgs = torch.cat(all_imgs, dim=0)
+            all_class_labels = torch.cat(all_class_labels, dim=0)
+            all_mask_lab = torch.cat(all_mask_lab, dim=0)
+            sample_dict = three_stage_sampling(all_distances, args.n_samples_1, args.n_samples_2, args.n_samples_3)
+            sample_imgs = all_imgs[sample_dict['sample_idxs']]
+            sample_class_labels = all_class_labels[sample_dict['sample_idxs']]
+            sample_uq_idxs = all_class_labels[sample_dict['sample_idxs']]
+            sample_mask_lab = all_mask_lab[sample_dict['sample_idxs']]
+
+            all_distances = []
+            all_imgs = []
+            all_class_labels = []
+            all_mask_lab = []
 
 
 def test(model, test_loader, epoch, save_name, args):
