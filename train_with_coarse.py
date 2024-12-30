@@ -73,7 +73,7 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
         t_values=np.linspace(0, args.epochs, args.epochs),
         T_start=args.cooloff_coarse_weight_start_epoch,
         T_end=args.cooloff_coarse_weight_end_epoch,
-        lambda_final=args.cooloff_coarse_weight
+        lambda_final=args.dc_weight
     )
     # coarse_weight_schedule = np.concatenate((
     #     np.ones(args.warmup_coarse_weight_start_epoch) * args.warmup_coarse_weight,
@@ -282,10 +282,20 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
                 # NOTE: DoublecoarsePrototypesSupclsClusterContrastiveSupcontrastive
                 # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss + doublecoarse_weight_schedule[epoch] * double_coarse_loss)
+                coarse_sup_loss = coarse_sup_con_loss + coarse_sup_cls_loss
+                coarse_unsup_loss = coarse_cluster_loss + coarse_contrastive_loss
                 if args.use_prototypes_loss:
-                    coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
-                else:
-                    coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
+                    coarse_unsup_loss += coarse_prototypes_loss
+                if args.use_coarse_label and args.use_gt_coarse_label:
+                    coarse_unsup_loss += coarse_gt_cls_loss
+
+                coarse_loss = args.sup_weight * coarse_sup_loss + (1 - args.sup_weight) * coarse_unsup_loss
+                
+                # if args.use_prototypes_loss:
+                #     coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
+                # else:
+                #     coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss)
+                
                 # NOTE: GtDoublecoarsePrototypesSupclsClusterContrastiveSupcontrastive
                 # coarse_loss = args.sup_weight * (coarse_sup_con_loss + coarse_sup_cls_loss + coarse_gt_cls_loss) + (1 - args.sup_weight) * (coarse_cluster_loss + coarse_contrastive_loss + coarse_prototypes_loss)
                 # NOTE: DoublecoarsePrototypesSupclsClusterContrastiveSupcontrastive + W_entropy_loss
@@ -296,7 +306,10 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 loss = 0.
                 # loss = args.fine_weight * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
                 # loss = (1.0 - coarse_weight_schedule[epoch]) * fine_loss + coarse_weight_schedule[epoch] * coarse_loss
-                loss = (1.0 - coarse_weight_schedule[epoch]) * fine_loss + coarse_weight_schedule[epoch] * coarse_loss + doublecoarse_weight_schedule[epoch] * double_coarse_loss
+                if args.fine_weight == -1:
+                    loss = (1.0 - coarse_weight_schedule[epoch]) * fine_loss + coarse_weight_schedule[epoch] * coarse_loss + doublecoarse_weight_schedule[epoch] * double_coarse_loss
+                else:
+                    loss = args.fine_weight * fine_loss + coarse_weight_schedule[epoch] * coarse_loss + doublecoarse_weight_schedule[epoch] * double_coarse_loss
                 
             # Train acc
             _, sup_pred = sup_logits.max(1)
@@ -543,6 +556,7 @@ if __name__ == "__main__":
     parser.add_argument('--cooloff_coarse_weight', type=float, default=2.0, help='Initial value for coarse_weight')
     parser.add_argument('--dc_weight', type=float, default=0.5)
     parser.add_argument('--use_prototypes_loss', type=str2bool, default=True)
+    parser.add_argument('--use_gt_coarse_label', type=str2bool, default=False)
     
 
     parser.add_argument('--do_test', type=str2bool, default=False)

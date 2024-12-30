@@ -6,3 +6,4 @@ pretrained_models
 screenlog.*
 *.ipynb
 extracted_features
+*.pt

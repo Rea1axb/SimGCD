@@ -48,7 +48,7 @@ def get_datasets(dataset_name, train_transform, test_transform, args):
     datasets = get_dataset_f(train_transform=train_transform, test_transform=test_transform,
                             train_classes=args.train_classes,
                             prop_train_labels=args.prop_train_labels,
-                            split_train_val=True,
+                            split_train_val=False,
                             use_coarse_label=args.use_coarse_label, args=args)
     # Set target transforms:
     target_transform_dict = {}
@@ -162,12 +162,33 @@ def get_class_splits(args):
         elif args.setting == '10new':
             args.train_classes = range(10)
             args.unlabeled_classes = range(10, 100)
+        elif args.setting == '10new_10-20':
+            args.train_classes = range(10, 20)
+            args.unlabeled_classes = [i for i in range(10)] + [i for i in range(20, 100)]
+        elif args.setting == '10new_20-30':
+            args.train_classes = range(20, 30)
+            args.unlabeled_classes = [i for i in range(20)] + [i for i in range(30, 100)]
         elif args.setting == '70new':
             args.train_classes = range(70)
             args.unlabeled_classes = range(70, 100)
         elif args.setting == '90new':
             args.train_classes = range(90)
             args.unlabeled_classes = range(90, 100)
+        elif args.setting == '90new_0-10':
+            args.train_classes = range(10, 100)
+            args.unlabeled_classes = range(0, 10)
+        elif args.setting == '90new_10-20':
+            args.train_classes = [i for i in range(10)] + [i for i in range(20, 100)]
+            args.unlabeled_classes = range(10, 20)
+        elif args.setting == '90new_20-30':
+            args.train_classes = [i for i in range(20)] + [i for i in range(30, 100)]
+            args.unlabeled_classes = range(20, 30)
+        elif args.setting == '90new_30-40':
+            args.train_classes = [i for i in range(30)] + [i for i in range(40, 100)]
+            args.unlabeled_classes = range(30, 40)
+        elif args.setting == '90new_40-50':
+            args.train_classes = [i for i in range(40)] + [i for i in range(50, 100)]
+            args.unlabeled_classes = range(40, 50)
         else:
             raise NotImplementedError
 
