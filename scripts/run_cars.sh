@@ -23,7 +23,7 @@ set -x
 #     --momentum_ema 0.99 \
 #     --exp_name scars_ema0.99_simgcd_default
 
-CUDA_VISIBLE_DEVICES=3 python train_with_coarse.py \
+CUDA_VISIBLE_DEVICES=0 python train_with_coarse.py \
     --dataset_name 'scars' \
     --setting 'default' \
     --batch_size 256 \
@@ -40,6 +40,7 @@ CUDA_VISIBLE_DEVICES=3 python train_with_coarse.py \
     --warmup_teacher_temp_epochs 30 \
     --memax_weight 1 \
     --eval_freq 10 \
+    --save_freq 30 \
     --fine_weight 1.0 \
     --warmup_coarse_weight 0.0 \
     --warmup_coarse_weight_start_epoch 30 \
@@ -48,6 +49,7 @@ CUDA_VISIBLE_DEVICES=3 python train_with_coarse.py \
     --cooloff_coarse_weight_start_epoch 120 \
     --cooloff_coarse_weight_end_epoch 150 \
     --cooloff_coarse_weight 0.5 \
+    --dc_weight 1.0 \
     --use_coarse_label 'True' \
     --use_memory_queue 'True' \
     --mq_start_add_epoch 0 \
@@ -55,4 +57,5 @@ CUDA_VISIBLE_DEVICES=3 python train_with_coarse.py \
     --mq_query_mode 'soft' \
     --mq_maxsize 1024 \
     --use_prototypes_attention 'False' \
-    --exp_name 'scars_default_twohead(DoubleCoarseClusterContrastiveSupcontrastiveCoarse)_weight(warmup_30-60_0.0-0.5_cooloff_120-150_0.5-0.5)_dcweight(0.0-0.5)_fineweight(dynamic)_batchsz(256)'
+    --use_prototypes_loss 'False' \
+    --exp_name 'scars_default_twohead(DoubleCoarseClusterContrastiveSupcontrastiveCoarse)_weight(warmup_30-60_0.0-0.5_cooloff_120-150_0.5-0.5)_dcweight(0.0-0.5)_fineweight(1.0)_batchsz(256)'

@@ -226,6 +226,7 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
                 sup_con_loss = SupConLoss()(student_proj, labels=sup_con_labels)
 
                 # coarse representation learning, sup 
+                # use simsiam-like sim function
                 student_pred = torch.cat([f[mask_lab].unsqueeze(1) for f in student_pred.chunk(2)], dim=1)
                 teacher_rep = torch.cat([f[mask_lab].unsqueeze(1) for f in teacher_rep.chunk(2)], dim=1)
                 sup_con_labels = class_labels[mask_lab]
