@@ -6,8 +6,14 @@ from tenacity import (
     wait_random_exponential,
 )
 
-_API_BASE = {
-    "moonshot-v1-8k": "https://api.moonshot.cn/v1"
+_API_URL_BASE = {
+    "moonshot-v1-8k": "https://api.moonshot.cn/v1",
+    "qwen-turbo": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+}
+
+_API_KEY_BASE = {
+    "moonshot-v1-8k": "sk-A0i771n6MVLOUOWFP6CvnATeV51DuLRxd6E01QU1qRFyEyc1",
+    "qwen-turbo": "sk-e13ffa365ad74b0ebcfd560f47ae621b",
 }
 
 SYSTEM_INSTRUCTION = "You are a helpful assistant."
@@ -29,19 +35,22 @@ def prepare_chatgpt_message(main_prompt):
 
 
 @retry(wait=wait_random_exponential(min=1, max=60), stop=stop_after_attempt(6))
-def call_gpts(client, chatgpt_messages, temperature=0.9, max_tokens=40, model="gpt-3.5-turbo"):
+def call_gpts(client, chatgpt_messages, temperature=0.9, max_tokens=40, model="gpt-3.5-turbo", response_format={"type": "text"}):
+    
     if max_tokens > 0:
         response = client.chat.completions.create(
             model=model,
             messages=chatgpt_messages,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            response_format=response_format
         )
     else:
         response = client.chat.completions.create(
             model=model,
             messages=chatgpt_messages,
-            temperature=temperature
+            temperature=temperature,
+            response_format=response_format
         )
 
     reply = response.choices[0].message.content
@@ -67,20 +76,26 @@ class LLMBot:
             temperature=0.9,
             max_chat_token=-1,
     ):
-        if model not in _API_BASE:
+        if model not in _API_URL_BASE:
             raise ValueError
 
         # self.client = OpenAI(
         #     api_key=os.environ["OPENAI_API_KEY"],
         # )
+        # self.client = OpenAI(
+        #     api_key="sk-A0i771n6MVLOUOWFP6CvnATeV51DuLRxd6E01QU1qRFyEyc1",
+        #     base_url="https://api.moonshot.cn/v1",
+        # )
         self.client = OpenAI(
-            api_key="sk-A0i771n6MVLOUOWFP6CvnATeV51DuLRxd6E01QU1qRFyEyc1",
-            base_url="https://api.moonshot.cn/v1",
+            api_key=_API_KEY_BASE[model],
+            base_url=_API_URL_BASE[model],
         )
         self.model_name = model
         self.max_chat_token = max_chat_token
         self.temperature = temperature
         self.total_tokens = 0
+        self.response_default_format = {"type": "text"}
+        self.response_json_format = {"type": "json_object"}
 
     def reset(self):
         self.total_tokens = 0
@@ -91,7 +106,7 @@ class LLMBot:
     def get_model_name(self):
         return self.model_name
 
-    def __query(self, prompt, temperature, max_token):
+    def __query(self, prompt, temperature, max_token, return_json=False):
         total_prompt = prepare_chatgpt_message(prompt)
         reply, n_tokens = call_gpts(
             client=self.client,
@@ -99,11 +114,12 @@ class LLMBot:
             temperature=temperature,
             model=self.model_name,
             max_tokens=max_token,
+            response_format=self.response_json_format if return_json else self.response_default_format
         )
         return reply, total_prompt, n_tokens
 
-    def infer(self, prompt, temperature=0.9):
-        reply, _, n_tokens = self.__query(prompt, temperature, max_token=self.max_chat_token)
+    def infer(self, prompt, temperature=0.9, return_json=False):
+        reply, _, n_tokens = self.__query(prompt, temperature, max_token=self.max_chat_token, return_json=return_json)
         self.total_tokens += n_tokens
         return reply.strip()
 

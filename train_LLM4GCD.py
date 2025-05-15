@@ -8,20 +8,40 @@ from torch.optim import SGD, lr_scheduler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from data.augmentations import get_transform
-from data.get_datasets import get_datasets, get_class_splits
+from data.augmentations import get_transform, denormalize
+from data.get_datasets import get_datasets, get_class_splits, get_name2label_label2name
 
-from util.general_utils import AverageMeter, init_experiment, get_mean_lr, three_stage_sampling
+from util.general_utils import AverageMeter, init_experiment, get_mean_lr, three_stage_sampling, label_based_sampling
 from util.cluster_and_log_utils import log_accs_from_preds
 from util.ema_utils import EMA
+from util.clip_utils import clip_finetune, get_new_prototypes
 from config import exp_root, dino_pretrain_path, clip_pretrain_path
-from model import DINOHead, info_nce_logits, SupConLoss, DistillLoss, ContrastiveLearningViewGenerator, get_params_groups
+from get_prompt import get_pseudo_labels, get_two_class_distinguish
+from model import DINOHead, LLMHead, info_nce_logits, SupConLoss, DistillLoss, ContrastiveLearningViewGenerator, get_params_groups
 
 # from vit_model import vision_transformer as vits
 from transformers import CLIPModel, CLIPProcessor
 
+def update_mask_lab_and_class_labels(mask_lab_batch, class_labels_batch, uq_idxs_batch, pseudo_label_dict):
+    """
+    Updates the mask_lab_batch and class_labels_batch based on the pseudo_label_dict.
 
-def train(student, train_loader, test_loader, unlabelled_train_loader, args):
+    Args:
+        mask_lab_batch (list): A list of boolean values indicating whether each sample should be masked or not.
+        class_labels_batch (list): A list of class labels for each sample.
+        uq_idxs_batch (list): A list of unique indices for each sample.
+        pseudo_label_dict (dict): A dictionary containing pseudo labels for certain unique indices.
+
+    Returns:
+        tuple: A tuple containing the updated mask_lab_batch and class_labels_batch.
+    """
+    for i, uq_idx in enumerate(uq_idxs_batch):
+        if str(uq_idx) in pseudo_label_dict:
+            mask_lab_batch[i] = True
+            class_labels_batch[i] = pseudo_label_dict[str(uq_idx)]
+    return mask_lab_batch, class_labels_batch
+
+def train(student, clip_processor, train_loader, test_loader, unlabelled_train_loader, args):
     params_groups = get_params_groups(student)
     optimizer = SGD(params_groups, lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     fp16_scaler = None
@@ -49,10 +69,14 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
     # best_train_acc_lab = 0
     # best_train_acc_ubl = 0 
     # best_train_acc_all = 0
-    all_distances = []
+    img_pseudo_label_bank = {}
+    img_describe_text_bank = {}
+    sample_bank = []
+    all_similarity = []
     all_imgs = []
     all_class_labels = []
     all_mask_lab = []
+    all_uq_idxs = []
 
     for epoch in range(args.epochs):
         loss_record = AverageMeter()
@@ -67,6 +91,8 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
         for batch_idx, batch in enumerate(train_loader):
             images, class_labels, uq_idxs, mask_lab = batch
             mask_lab = mask_lab[:, 0]
+
+            mask_lab, class_labels = update_mask_lab_and_class_labels(mask_lab, class_labels, uq_idxs, pseudo_label_dict=img_pseudo_label_bank)
 
             class_labels, mask_lab = class_labels.cuda(non_blocking=True), mask_lab.cuda(non_blocking=True).bool()
             images = torch.cat(images, dim=0).cuda(non_blocking=True)
@@ -119,16 +145,6 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
             sup_con_loss_record.update(sup_con_loss.item(), class_labels.size(0))
             contrastive_loss_record.update(contrastive_loss.item(), class_labels.size(0))
 
-            # TODO sample_based_on_distance\
-            if (epoch + 1) % args.query_freq == 0:
-                with torch.no_grad():
-                    all_distances.append(teacher_out.detach().cpu())
-                    all_imgs.append(images.detach().cpu())
-                    all_class_labels.append(class_labels)
-                    all_mask_lab.append(mask_lab)
-
-
-
             optimizer.zero_grad()
             if fp16_scaler is None:
                 loss.backward()
@@ -141,6 +157,13 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
             if batch_idx % args.print_freq == 0:
                 args.logger.info('Epoch: [{}][{}/{}]\t loss {:.5f}\t {}'
                             .format(epoch, batch_idx, len(train_loader), loss.item(), pstr))
+            
+            if (epoch + 1) % args.query_freq == 0:
+                all_similarity.append(teacher_out.chunk(2)[0].detach().cpu())
+                all_imgs.append(images.chunk(2)[0].detach().cpu())
+                all_class_labels.append(class_labels)
+                all_mask_lab.append(mask_lab)
+                all_uq_idxs.append(uq_idxs)
 
         args.logger.info('Train Epoch: {} Avg Loss: {:.4f} '.format(epoch, loss_record.avg))
 
@@ -167,47 +190,110 @@ def train(student, train_loader, test_loader, unlabelled_train_loader, args):
         args.writer.add_scalar('Train Acc Labelled Data', train_acc_labelled.avg, epoch)
         args.writer.add_scalar('LR', get_mean_lr(optimizer), epoch) 
 
-        save_dict = {
-            'model': student.state_dict(),
-            'optimizer': optimizer.state_dict(),
-            'epoch': epoch + 1,
-        }
+        if (epoch + 1) % args.save_freq == 0:
+            save_dict = {
+                'model': student.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'epoch': epoch + 1,
+            }
+            torch.save(save_dict, args.model_path)
+            args.logger.info("model saved to {}.".format(args.model_path))
+        
 
-        torch.save(save_dict, args.model_path)
-        args.logger.info("model saved to {}.".format(args.model_path))
-
-        # if old_acc_test > best_test_acc_lab:
-        #     
-        #     args.logger.info(f'Best ACC on old Classes on disjoint test set: {old_acc_test:.4f}...')
-        #     args.logger.info('Best Train Accuracies: All {:.4f} | Old {:.4f} | New {:.4f}'.format(all_acc, old_acc, new_acc))
-        #     
-        #     torch.save(save_dict, args.model_path[:-3] + f'_best.pt')
-        #     args.logger.info("model saved to {}.".format(args.model_path[:-3] + f'_best.pt'))
-        #     
-        #     # inductive
-        #     best_test_acc_lab = old_acc_test
-        #     # transductive            
-        #     best_train_acc_lab = old_acc
-        #     best_train_acc_ubl = new_acc
-        #     best_train_acc_all = all_acc
-        # 
-        # args.logger.info(f'Exp Name: {args.exp_name}')
-        # args.logger.info(f'Metrics with best model on test set: All: {best_train_acc_all:.4f} Old: {best_train_acc_lab:.4f} New: {best_train_acc_ubl:.4f}')
         if (epoch + 1) % args.query_freq == 0:
-            all_distances = torch.cat(all_distances, dim=0)
-            all_imgs = torch.cat(all_imgs, dim=0)
-            all_class_labels = torch.cat(all_class_labels, dim=0)
-            all_mask_lab = torch.cat(all_mask_lab, dim=0)
-            sample_dict = three_stage_sampling(all_distances, args.n_samples_1, args.n_samples_2, args.n_samples_3)
-            sample_imgs = all_imgs[sample_dict['sample_idxs']]
-            sample_class_labels = all_class_labels[sample_dict['sample_idxs']]
-            sample_uq_idxs = all_class_labels[sample_dict['sample_idxs']]
-            sample_mask_lab = all_mask_lab[sample_dict['sample_idxs']]
+            with torch.no_grad():
+                all_similarity = torch.cat(all_similarity, dim=0)
+                all_imgs = torch.cat(all_imgs, dim=0)
+                all_class_labels = torch.cat(all_class_labels, dim=0)
+                all_mask_lab = torch.cat(all_mask_lab, dim=0)
+                all_uq_idxs = torch.cat(all_uq_idxs, dim=0)
 
-            all_distances = []
+                unlabel_similarity = all_similarity[~all_mask_lab]
+                unlabel_imgs = all_imgs[~all_mask_lab]
+                unlabel_imgs = denormalize(unlabel_imgs)
+                unlabel_class_labels = all_class_labels[~all_mask_lab]
+                unlabel_mask_lab = all_mask_lab[~all_mask_lab]
+                unlabel_uq_idxs = all_uq_idxs[~all_mask_lab]
+
+                label_similarity = all_similarity[all_mask_lab]
+                label_imgs = all_imgs[all_mask_lab]
+                label_imgs = denormalize(label_imgs)
+                label_class_labels = all_class_labels[all_mask_lab]
+                label_mask_lab = all_mask_lab[all_mask_lab]
+                label_uq_idxs = all_uq_idxs[all_mask_lab]
+
+                # unlabel
+                sample_dict, nearest_two_class = three_stage_sampling(unlabel_similarity, args.n_samples_1, args.n_samples_2, args.n_samples_3)
+                # label
+                label_indices = label_based_sampling(label_class_labels, args.n_samples_label)
+
+
+                pseudo_sample_imgs = torch.cat([unlabel_imgs[sample_dict['stage_1']], unlabel_imgs[sample_dict['stage_3']], label_imgs[label_indices]], dim=0)
+                pseudo_sample_class_labels = torch.cat([unlabel_class_labels[sample_dict['stage_3']], unlabel_class_labels[sample_dict['stage_3']], label_class_labels[label_indices]], dim=0)
+                pseudo_sample_uq_idxs = torch.cat([unlabel_uq_idxs[sample_dict['stage_1']], unlabel_uq_idxs[sample_dict['stage_3']], label_uq_idxs[label_indices]], dim=0)
+                pseudo_sample_mask_lab = torch.cat([unlabel_mask_lab[sample_dict['stage_1']], unlabel_mask_lab[sample_dict['stage_3']], label_mask_lab[label_indices]], dim=0)
+
+                distinguish_sample_imgs = unlabel_imgs[sample_dict['stage_2']]
+                distinguish_sample_class_labels = unlabel_class_labels[sample_dict['stage_2']]
+                distinguish_sample_uq_idxs = unlabel_uq_idxs[sample_dict['stage_2']]
+                distinguish_sample_mask_lab = unlabel_mask_lab[sample_dict['stage_2']]
+                img_pseudolabel_list = list(zip(pseudo_sample_imgs, pseudo_sample_class_labels, pseudo_sample_uq_idxs, pseudo_sample_mask_lab))
+                img_distinguish_list = list(zip(distinguish_sample_imgs, distinguish_sample_class_labels, distinguish_sample_uq_idxs, distinguish_sample_mask_lab))
+
+                
+                #TODO:vqa load once
+                img_pseudo_label_res, img_describe_text_res, is_valid = get_pseudo_labels(
+                    img_data=img_pseudolabel_list, 
+                    clip_model=student.clip_model, 
+                    clip_processor=clip_processor, 
+                    label2name=student.projector.label2name, 
+                    model_type_llm='qwen-turbo',
+                    prompt_dir=args.prompt_dir
+                )
+                img_pseudo_label_bank.update(img_pseudo_label_res)
+                img_describe_text_bank.update(img_describe_text_res)
+
+                valid_img_pseudolabel_list = list(zip(pseudo_sample_imgs[is_valid], pseudo_sample_class_labels[is_valid], pseudo_sample_uq_idxs[is_valid], pseudo_sample_mask_lab[is_valid]))
+                sample_bank.extend(valid_img_pseudolabel_list)
+
+                #TODO: distinguish to use
+                # nearest_two_class_dict = {str(uq_idx.item()):(student.projector.label2name[nearest_two_class[idx][0]], student.projector.label2name[nearest_two_class[idx][1]]) for idx, uq_idx in enumerate(distinguish_sample_uq_idxs)}
+                # img_distinguish_res = get_two_class_distinguish(
+                #     img_data=img_distinguish_list,
+                #     two_class_dict=nearest_two_class_dict,
+                #     model_type_llm='qwen-turbo',
+                #     prompt_dir=args.prompt_dir
+
+                # )
+
+            clip_finetune(
+                clip_model=student.clip_model, 
+                clip_processor=clip_processor, 
+                sample_imgs=pseudo_sample_imgs[is_valid], 
+                sample_class_labels=pseudo_sample_class_labels[is_valid], 
+                sample_uq_idxs=pseudo_sample_uq_idxs[is_valid], 
+                sample_mask_lab=pseudo_sample_mask_lab[is_valid], 
+                img_describe_text_res=img_describe_text_res, 
+                train_epoch=args.clip_train_epochs, 
+                device_id=0
+            )
+
+            with torch.no_grad():
+                new_prototypes = get_new_prototypes(
+                    clip_model=student.clip_model,
+                    clip_processor=clip_processor,
+                    sample_bank=sample_bank,
+                    img_pseudo_label_bank=img_pseudo_label_bank,
+                    img_describe_text_bank=img_describe_text_bank,
+                ) # dict
+                
+                student.projector.update_prototypes(new_prototypes)
+
+            all_similarity = []
             all_imgs = []
             all_class_labels = []
             all_mask_lab = []
+            all_uq_idxs = []
 
 
 def test(model, test_loader, epoch, save_name, args):
@@ -270,6 +356,7 @@ if __name__ == "__main__":
     parser.add_argument('--exp_name', default=None, type=str)
     parser.add_argument('--setting', type=str, default='default', help='dataset setting')
     parser.add_argument('--eval_freq', type=int, default=10, help='eval frequency when training')
+    parser.add_argument('--save_freq', type=int, default=10, help='save frequency when training')
 
     parser.add_argument('--use_coarse_label', action='store_true', default=False)
     parser.add_argument('--sup_coarse_con_weight', type=float, default=0.5)
@@ -277,6 +364,14 @@ if __name__ == "__main__":
     parser.add_argument('--use_ema', action='store_true', default=False)
     parser.add_argument('--momentum_ema', type=float, default=0.999)
     parser.add_argument('--interval_ema', type=int, default=1, help='ema update interval')
+
+    parser.add_argument('--n_samples_1', type=int, default=5, help='clip finetune epoch')
+    parser.add_argument('--n_samples_2', type=int, default=5, help='clip finetune epoch')
+    parser.add_argument('--n_samples_3', type=int, default=5, help='clip finetune epoch')
+    parser.add_argument('--n_samples_label', type=int, default=5, help='clip finetune epoch')
+    parser.add_argument('--clip_train_epochs', type=int, default=1, help='clip finetune epoch')
+    parser.add_argument('--query_freq', type=int, default=10, help='query frequency')
+    parser.add_argument('--prompt_dir', type=str, default=None)
 
     # ----------------------
     # INIT
@@ -313,7 +408,8 @@ if __name__ == "__main__":
     args.image_size = 224
     args.feat_dim = 512
     args.num_mlp_layers = 3
-    args.mlp_out_dim = args.num_labeled_classes + args.num_unlabeled_classes
+    # args.mlp_out_dim = args.num_labeled_classes + args.num_unlabeled_classes
+    args.mlp_out_dim = args.num_labeled_classes
 
     # ----------------------
     # HOW MUCH OF BASE MODEL TO FINETUNE
@@ -322,11 +418,31 @@ if __name__ == "__main__":
     for param in clip_model.parameters():
         param.requires_grad = False
     
-    last_block = clip_model.vision_model.encoder.layers[-1]
+    # last_block = clip_model.vision_model.encoder.layers[-1]
+    # vision_proj = clip_model.visual_projection
 
-    for param in last_block.parameters():
+    vision_last_block = clip_model.vision_model.encoder.layers[-1]
+    text_last_block = clip_model.text_model.encoder.layers[-1]
+    vision_proj = clip_model.visual_projection
+    text_proj = clip_model.text_projection
+
+    for param in vision_last_block.parameters():
         param.requires_grad = True
 
+    for param in vision_proj.parameters():
+        param.requires_grad = True
+
+    for param in text_last_block.parameters():
+        param.requires_grad = True
+
+    for param in text_proj.parameters():
+        param.requires_grad = True
+
+    # for param in last_block.parameters():
+    #     param.requires_grad = True
+
+    # for param in vision_proj.parameters():
+    #     param.requires_grad = True
     
     args.logger.info('model build')
 
@@ -366,7 +482,15 @@ if __name__ == "__main__":
     # ----------------------
     # PROJECTION HEAD
     # ----------------------
-    projector = DINOHead(in_dim=args.feat_dim, out_dim=args.mlp_out_dim, nlayers=args.num_mlp_layers)
+    # projector = DINOHead(in_dim=args.feat_dim, out_dim=args.mlp_out_dim, nlayers=args.num_mlp_layers)
+    init_name2label, init_label2name = get_name2label_label2name(args.dataset_name, test_dataset, args.train_classes)
+    projector = LLMHead(
+        in_dim=args.feat_dim, 
+        initial_out_dim=args.mlp_out_dim, 
+        init_name2label=init_name2label,
+        init_label2name=init_label2name,
+        nlayers=args.num_mlp_layers
+    )
     model = nn.ModuleDict({
         'clip_model': clip_model,
         'projector': projector,
@@ -386,4 +510,4 @@ if __name__ == "__main__":
     #     model_t = nn.Sequential(backbone_t, projector_t).to(device)
     #     train_ema(model, model_t, train_loader, test_loader_labelled, test_loader_unlabelled, args)
     # else:
-    train(model, train_loader, test_loader_labelled, test_loader_unlabelled, args)
+    train(model, clip_processor, train_loader, test_loader_labelled, test_loader_unlabelled, args)

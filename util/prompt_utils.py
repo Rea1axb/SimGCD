@@ -7,26 +7,34 @@ import random
 import json
 
 def get_distinguish_prompt(super_class_set):
-    prompt_howto = f"""
+    """
+    Generate a dictionary of prompts for distinguishing attributes of different superclasses.
+
+    Args:
+        super_class_set (set): A set of superclass names.
+
+    Returns:
+        dict: A dictionary where the keys are the superclass names and the values are the corresponding prompts.
+
+    """
+    prompt_howto = """
     Your task is to tell me what are the useful attributes for distinguishing [__SUPERCLASS__] categories in a photo of a [__SUPERCLASS__].
 
     Specifically, you can complete the task by following the instructions below:
-    1 - I give you an example delimited by <> about what are the useful attributes for distinguishing bird species in 
-    a photo of a bird. You should understand and learn this example carefully.
-    2 - List the 5 most useful attributes for distinguishing [__SUPERCLASS__] categories in a photo of a [__SUPERCLASS__].
-    3 - Output a Python list object that contains the listed useful attributes.
+    1 - I give you an example about what are the useful attributes for distinguishing dog species in 
+    a photo of a dog. You should understand and learn this example carefully.
+    2 - List the most useful attributes for distinguishing [__SUPERCLASS__] class in [__SUPERCLASS__] photos, sorted by importance from most to least.
+    3 - Output a JSON object that contains the listed useful attributes.(filling in the content between the angle brackets <> in 'Output')
 
-    ===
-    example:
-    <bird species>
-    The useful attributes for distinguishing bird species in a photo of a bird:
-    ['bill shape', 'wing color', 'upperparts color', 'underparts color', 'breast pattern'
-    ]
+    === Example:
+    {'dog': ['ear shape', 'tail length', 'fur color', 'snout length', 'body size', 'pattern']}
     ===
 
-    ===
-    <[__SUPERCLASS__] categories>
-    The useful attributes for distinguishing [__SUPERCLASS__] categories in a photo of a [__SUPERCLASS__]:
+    === Output:
+    {
+        [__SUPERCLASS__]:
+        <The list of useful attributes for distinguishing [__SUPERCLASS__] categories in a photo of a [__SUPERCLASS__]>
+    }
     ===
     """
     prompt_distinguish_dict = dict()
@@ -38,40 +46,102 @@ def get_attr_prompt(super_class, attr):
     return f"Describe the {attr} of the {super_class} in this photo."
 
 def get_guess_prompt(super_class, attribute_list):
-    prompt = f"""
-    I have a photo of a {super_class}. 
+    """
+    Generates a prompt for guessing the attributes and summary of a given superclass based on a photo.
+
+    Args:
+        super_class (str): The name of the superclass.
+        attribute_list (list): A list of tuples containing attribute names and their corresponding values.
+
+    Returns:
+        str: The generated prompt for guessing the attributes and summary.
+
+    Example Usage:
+        super_class = "Dog"
+        attribute_list = [("Ears", "Semi-erect ears with the tips folding forward slightly."),
+                          ("Tail", "Medium length with a slight curve."),
+                          ("Snout", "Moderately long."),
+                          ("Fur Color", "Black and white."),
+                          ("Size", "Medium-sized.")]
+
+        prompt = get_guess_prompt(super_class, attribute_list)
+        print(prompt)
+    """
+
+    prompt = """
+    I have a photo of a [__SUPERCLASS__]. 
     Your task is to perform the following actions:
-    1 - Summarize the information you get about the {super_class} from the general description and attribute description \
-    delimited by triple backticks with five sentences.
-    2 - Infer and list three possible breed names of the {super_class} in this photo based on the information you get.
-    3 - Output a JSON object that uses the following format
-    <three possible {super_class} breeds>: [
-            <first sentence of the summary>,
-            <second sentence of the summary>,
-            <third sentence of the summary>,
-            <fourth sentence of the summary>,
-            <fifth sentence of the summary>,
-    ]
+    1 - Summarize the information you get about the [__SUPERCLASS__] from the Attributes List delimited by triple backticks with five sentences.
+    2 - Infer three possible breed names and five sentence of summary of the [__SUPERCLASS__] in this photo based on the information you get.
+    3 - Output a JSON object that uses the 'Example' and 'Output' format.(filling in the content between the angle brackets <> in 'Output')
 
+    === Example:
+    {
+        'three possible names': ['Border Collie', 'Cocker Spaniels', 'Dobermans']
+        'information summary': [
+            'It typically have semi-erect ears with the tips folding forward slightly.', 
+            'The tail is of medium length and usually have a slight curve.', 
+            'It have a moderately long snout.', 
+            'The fur color is black and white.', 
+            'It is a medium-sized dog.',
+        ]
+    }
+    ===
+
+    === Output:
+    {
+        'three possible names': [<name_1>, <name_2>, <name_3>]
+        'information summary': [
+            <summary_sentence_1>, 
+            <summary_sentence_2>,
+            <summary_sentence_3>,
+            <summary_sentence_4>,
+            <summary_sentence_5>,
+        ]
+    }
+    ===
+    
     Use the following format to perform the aforementioned tasks:
-    General Description: '''general description of the photo'''
-    Attributes List:
-    - '''attribute name''': '''attribute description'''
-    - '''attribute name''': '''attribute description'''
-    - ...
-    - '''attribute name''': '''attribute description'''
-    Summary: <summary>
-    Three possible {super_class} breed names: <three possible {super_class} breed names>
-    Output JSON: <output JSON object>
-
     Attributes List:
     """
     for attr, attr_val in attribute_list:
         prompt += f"""
         - '''{attr}''': '''{attr_val}'''
         """
+    prompt = prompt.replace('[__SUPERCLASS__]', super_class)
     return prompt
 
+def get_distinguish_two_class_prompt(super_class, class_1, class_2, attribute_list):
+    prompt = """
+    I have a photo of a [__SUPERCLASS__]. 
+    Your task is to perform the following actions:
+    1 - Learn the information you get about the [__SUPERCLASS__] from Attributes List delimited by triple backticks.
+    2 - Determine whether the [__SUPERCLASS__] in this photo based on the information you get is more likely to be [__CLASS1__] or [__CLASS1__] ?
+    3 - Output a JSON object that uses the following format
+    
+    === Example:
+    {
+        'class': 'Border Collie'
+    }
+    ===
+
+    === Output:
+    {
+        'class': <[__CLASS1__](or [__CLASS2__])>
+    }
+    ===
+
+    Use the following format to perform the aforementioned tasks:
+    Attributes List:
+    """
+    for attr, attr_val in attribute_list:
+        prompt += f"""
+        - '''{attr}''': '''{attr_val}'''
+        """
+    prompt = prompt.replace('[__SUPERCLASS__]', super_class)
+    prompt = prompt.replace('[__CLASS1__]', class_1)
+    prompt = prompt.replace('[__CLASS2__]', class_2)
+    return prompt
 
 def mkdir_if_missing(directory: str):
     if not os.path.exists(directory):

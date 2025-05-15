@@ -36,3 +36,12 @@ def get_transform(transform_type='imagenet', image_size=32, args=None):
         raise NotImplementedError
 
     return (train_transform, test_transform)
+
+def denormalize(normalized_img):
+    mean = (0.485, 0.456, 0.406)
+    std = (0.229, 0.224, 0.225)
+    mean = torch.tensor(mean).view(1, 3, 1, 1)
+    std = torch.tensor(std).view(1, 3, 1, 1)
+    denormalized_img = normalized_img * std + mean
+    denormalized_img.clamp_(0, 1)
+    return denormalized_img

@@ -43,6 +43,14 @@ class CustomCIFAR100(CIFAR100):
         else:
             return img, label, uq_idx
 
+def get_cifar100_new_label_map(train_classes):
+    new_label_map = {cls: i for i, cls in enumerate(train_classes)}
+    # 将未知类别映射到剩余编号 [len(known_classes), ...]
+    unknown_classes = [cls for cls in range(100) if cls not in train_classes]
+    offset = len(train_classes)
+    for i, cls in enumerate(unknown_classes):
+        new_label_map[cls] = i + offset
+    return new_label_map
 
 def subsample_dataset(dataset, idxs):
 
@@ -140,9 +148,12 @@ def get_cifar_100_datasets(train_transform, test_transform, train_classes=range(
                        prop_train_labels=0.8, split_train_val=False, seed=0, use_coarse_label=False):
 
     np.random.seed(seed)
+    
+    new_label_map = get_cifar100_new_label_map(train_classes)
 
     # Init entire training set
     whole_training_set = CustomCIFAR100(use_coarse_label=use_coarse_label, root=cifar_100_root, transform=train_transform, train=True)
+    whole_training_set.target_transform = lambda x: new_label_map[x]
 
     # Get labelled training set which has subsampled classes, then subsample some indices from that
     train_dataset_labelled = subsample_classes(deepcopy(whole_training_set), include_classes=train_classes)
@@ -161,6 +172,55 @@ def get_cifar_100_datasets(train_transform, test_transform, train_classes=range(
 
     # Get test set for all classes
     test_dataset = CustomCIFAR100(use_coarse_label=use_coarse_label, root=cifar_100_root, transform=test_transform, train=False)
+    test_dataset.target_transform = lambda x: new_label_map[x]
+
+    # Either split train into train and val or use test set as val
+    train_dataset_labelled = train_dataset_labelled_split if split_train_val else train_dataset_labelled
+    val_dataset_labelled = val_dataset_labelled_split if split_train_val else None
+
+    all_datasets = {
+        'train_labelled': train_dataset_labelled,
+        'train_unlabelled': train_dataset_unlabelled,
+        'val': val_dataset_labelled,
+        'test': test_dataset,
+    }
+
+    return all_datasets
+
+def get_cifar_100_small_datasets(train_transform, test_transform, train_classes=range(80),
+                       prop_train_labels=0.8, split_train_val=False, seed=0, use_coarse_label=False, prop_small=0.1, args=None):
+
+    np.random.seed(seed)
+
+    new_label_map = get_cifar100_new_label_map(train_classes)
+
+    # Init entire training set
+    whole_training_set = CustomCIFAR100(use_coarse_label=use_coarse_label, root=cifar_100_root, transform=train_transform, train=True)
+    whole_training_set.target_transform = lambda x: new_label_map[x]
+
+    # Get small train dataset
+    small_indices = subsample_instances(deepcopy(whole_training_set), prop_indices_to_subsample=prop_small)
+    small_whole_training_set = subsample_dataset(deepcopy(whole_training_set), small_indices)
+
+    # Get labelled training set which has subsampled classes, then subsample some indices from that
+    train_dataset_labelled = subsample_classes(deepcopy(small_whole_training_set), include_classes=train_classes)
+    subsample_indices = subsample_instances(train_dataset_labelled, prop_indices_to_subsample=prop_train_labels)
+    train_dataset_labelled = subsample_dataset(train_dataset_labelled, subsample_indices)
+
+    # Split into training and validation sets
+    train_idxs, val_idxs = get_train_val_indices(train_dataset_labelled)
+    train_dataset_labelled_split = subsample_dataset(deepcopy(train_dataset_labelled), train_idxs)
+    val_dataset_labelled_split = subsample_dataset(deepcopy(train_dataset_labelled), val_idxs)
+    val_dataset_labelled_split.transform = test_transform
+
+    # Get unlabelled data
+    unlabelled_indices = set(small_whole_training_set.uq_idxs) - set(train_dataset_labelled.uq_idxs)
+    train_dataset_unlabelled = subsample_dataset(deepcopy(whole_training_set), np.array(list(unlabelled_indices)))
+
+    # Get test set for all classes
+    # NOTE: use whole test set
+    test_dataset = CustomCIFAR100(use_coarse_label=use_coarse_label, root=cifar_100_root, transform=test_transform, train=False)
+    test_dataset.target_transform = lambda x: new_label_map[x]
 
     # Either split train into train and val or use test set as val
     train_dataset_labelled = train_dataset_labelled_split if split_train_val else train_dataset_labelled

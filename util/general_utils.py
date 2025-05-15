@@ -92,76 +92,78 @@ def init_experiment(args, runner_name=None, exp_id=None):
 
     return args
 
-def three_stage_sampling(distances, num_samples_1, num_samples_2, num_samples_3, eps=1e-6):
+def label_based_sampling(labels, sample_num):
     """
-    Performs three-stage sampling based on distances to prototypes.
+    Performs sampling on labeled data, ensuring each class has `sample_num` samples.
+    If a class has fewer than `sample_num` samples, all samples from that class are selected.
 
     Args:
-        distances (torch.Tensor): Tensor of shape (N, M) containing distances to prototypes, where N is the number of samples and M is the number of prototypes.
-        num_samples_1 (int): Number of samples to select in the first stage.
-        num_samples_2 (int): Number of samples to select in the second stage.
-        num_samples_3 (int): Number of samples to select in the third stage.
+        labels (torch.Tensor): 1D tensor of shape (N,) containing class labels for each sample.
+        sample_num (int): Number of samples to select per class.
+
+    Returns:
+        list: List of sampled indices.
+    """
+    #TODO: debug
+    label_to_indices = dict()
+    for idx, label in enumerate(labels):
+        if label.item() not in label_to_indices:
+            label_to_indices[label.item()] = []
+        label_to_indices[label.item()].append(idx)
+
+    # 按类别进行采样
+    sampled_indices = []
+    for label, indices in label_to_indices.items():
+        if len(indices) <= sample_num:
+            sampled_indices.extend(indices)  # 全部采样
+        else:
+            sampled_indices.extend([indices[i] for i in torch.randperm(len(indices))[:sample_num].tolist()])  # 随机采样
+
+    return sampled_indices
+
+def three_stage_sampling(similarity, num_samples_1, num_samples_2, num_samples_3, eps=1e-6):
+    """
+    Perform three-stage sampling based on similarity scores.
+
+    Args:
+        similarity (torch.Tensor): Tensor of similarity scores.
+        num_samples_1 (int): Number of samples to be selected in the first stage.
+        num_samples_2 (int): Number of samples to be selected in the second stage.
+        num_samples_3 (int): Number of samples to be selected in the third stage.
         eps (float, optional): Small value added to avoid division by zero. Defaults to 1e-6.
 
     Returns:
-        dict: A dictionary containing the sampled indices for each stage.
-            - 'stage_1': List of indices representing the samples selected in the first stage.
-            - 'stage_2': List of indices representing the samples selected in the second stage.
-            - 'stage_3': List of indices representing the samples selected in the third stage.
+        tuple: A tuple containing two elements:
+            - sampled_indices (dict): A dictionary containing the sampled indices for each stage.
+            - nearest_two_prototypes (list): A list of indices of the nearest two prototypes for each sample in the second stage.
+
     """
     sampled_indices = {}
-    sorted_distances, _ = torch.sort(distances, dim=1)  # Sort distances
+    sorted_similarity, sorted_idxs = torch.sort(similarity, dim=1)  # Sort similarity
+    sorted_similarity = (sorted_similarity + 1.0) / 2.0  # Normalize similarity to [0, 1]
 
     # First stage sampling
-    weights_1 = sorted_distances[:, 0]  # Distances to the nearest prototype
+    weights_1 = sorted_similarity[:, 0]  # Similarity to the nearest prototype
     weights_1 /= torch.sum(weights_1)  # Normalize weights
     sampled_indices['stage_1'] = torch.multinomial(weights_1, num_samples_1, replacement=False).tolist()
 
     # Second stage sampling
-    diff_distances = torch.abs(sorted_distances[:, 0] - sorted_distances[:, 1])  # Difference between distances to the nearest and second nearest prototypes
-    weights_2 = 1 / (diff_distances + eps)  # Inverse of difference distances
+    diff_distances = torch.abs(sorted_similarity[:, 0] - sorted_similarity[:, 1])  # Difference between similarity to the nearest and second nearest prototypes
+    weights_2 = 1 / (diff_distances + eps)  # Inverse of difference similarity
     weights_2 /= torch.sum(weights_2)  # Normalize weights
     sampled_indices['stage_2'] = torch.multinomial(weights_2, num_samples_2, replacement=False).tolist()
 
+    nearest_two_prototypes = []  # List of indices of the nearest two prototypes
+    for idx in sampled_indices['stage_2']:
+        nearest_two_prototypes.append(sorted_idxs[idx, :2].tolist())  # Get indices of the nearest two prototypes
+
     # Third stage sampling
-    weights_3 = 1 / (sorted_distances[:, 0] + eps)  # Inverse of distances
+    weights_3 = 1 / (sorted_similarity[:, 0] + eps)  # Inverse of similarity
     weights_3 /= torch.sum(weights_3)  # Normalize weights
     sampled_indices['stage_3'] = torch.multinomial(weights_3, num_samples_3, replacement=False).tolist()
     
-    return sampled_indices
+    return sampled_indices, nearest_two_prototypes
     
-# def sample_based_on_distance(distances, num_samples=10):
-#     """
-#     根据样本到原型的距离进行采样。
-
-#     :param distances: Tensor (batch_size, num_prototypes)，样本到原型的距离。
-#     :param num_samples: int,最终采样的样本数量。
-#     :return: List[int]，采样的索引。
-#     """
-#     # Step 1: 计算距离的统计量
-#     min_distances, _ = torch.min(distances, dim=1)  # 到最近原型的距离
-#     mean_distance = torch.mean(min_distances)      # 距离均值
-
-#     # Step 2: 定义采样权重规则
-#     weights = torch.ones_like(min_distances)
-
-#     # (1) 距离较近的样本（靠近原型）
-#     close_mask = min_distances <= mean_distance * 0.25
-#     weights[close_mask] += 1.0  # 权重增加
-
-#     # (2) 距离在分类边界上的样本（接近均值）
-#     boundary_mask = (min_distances > mean_distance * 0.8) & (min_distances <= mean_distance * 1.2)
-#     weights[boundary_mask] += 1.0
-
-#     # (3) 距离较远的样本（远离原型）
-#     far_mask = min_distances > mean_distance * 1.5
-#     weights[far_mask] += 1.0
-
-#     # Step 3: 按权重进行采样
-#     weights = weights / torch.sum(weights)  # 归一化权重
-#     sampled_indices = torch.multinomial(weights, num_samples, replacement=False)
-
-#     return sampled_indices.tolist()
 
 def get_mean_lr(optimizer):
     return torch.mean(torch.Tensor([param_group['lr'] for param_group in optimizer.param_groups])).item()

@@ -40,6 +40,99 @@ class DINOHead(nn.Module):
         # x = x.detach()
         logits = self.last_layer(x)
         return x_proj, logits
+    
+class LLMHead(nn.Module):
+    def __init__(self, in_dim, initial_out_dim, init_name2label, init_label2name, use_bn=False, norm_last_layer=True, 
+                 nlayers=3, hidden_dim=2048, bottleneck_dim=256):
+        super().__init__()
+        self.num_prototypes = initial_out_dim  # 当前原型数量
+        #TODO: target transform
+        self.name2label = init_name2label
+        self.label2name = init_label2name
+
+        self.norm_last_layer = norm_last_layer
+
+        nlayers = max(nlayers, 1)
+        if nlayers == 1:
+            self.mlp = nn.Linear(in_dim, bottleneck_dim)
+        elif nlayers != 0:
+            layers = [nn.Linear(in_dim, hidden_dim)]
+            if use_bn:
+                layers.append(nn.BatchNorm1d(hidden_dim))
+            layers.append(nn.GELU())
+            for _ in range(nlayers - 2):
+                layers.append(nn.Linear(hidden_dim, hidden_dim))
+                if use_bn:
+                    layers.append(nn.BatchNorm1d(hidden_dim))
+                layers.append(nn.GELU())
+            layers.append(nn.Linear(hidden_dim, bottleneck_dim))
+            self.mlp = nn.Sequential(*layers)
+        self.apply(self._init_weights)
+
+        # 初始化原型权重
+        self.last_layer = nn.utils.weight_norm(nn.Linear(in_dim, initial_out_dim, bias=False))
+        self.last_layer.weight_g.data.fill_(1)
+        if self.norm_last_layer:
+            self.last_layer.weight_g.requires_grad = False
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.trunc_normal_(m.weight, std=.02)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        x_proj = self.mlp(x)
+        x = nn.functional.normalize(x, dim=-1, p=2)  # 特征归一化
+        logits = self.last_layer(x)
+        return x_proj, logits
+    
+
+    def update_prototypes(self, new_prototype_dict, momentum=0.9):
+        """
+        Update existing prototypes and add new prototypes.
+
+        Args:
+            new_prototype_dict (dict): A dictionary of new prototypes {label_name: vector}.
+            momentum (float): Momentum for updating existing weights.
+        """
+        weight_v = self.last_layer.weight_v  # Existing prototype weights
+        dim = weight_v.size(1)
+
+        new_labels = []
+        new_vectors = []
+
+        for label_name, img_text_prototypes in new_prototype_dict.items():
+            img_prototype, text_prototype = img_text_prototypes
+            vector = (img_prototype + text_prototype) / 2
+
+            if label_name in self.name2label:
+                idx = self.name2label[label_name]
+                updated_vector = (
+                    momentum * weight_v[idx] + (1 - momentum) * vector.clone().detach().to(weight_v.device)
+                )
+                weight_v[idx] = updated_vector
+            else:  # Add new prototype
+                new_labels.append(label_name)
+                new_vectors.append(vector.clone().detach().to(weight_v.device))                
+
+        # Add new prototypes to weight matrix
+        if new_vectors:
+            new_vectors = torch.stack(new_vectors).squeeze()  # Convert list to tensor
+            self.last_layer.weight_v = nn.Parameter(
+                torch.cat([weight_v, new_vectors], dim=0)
+            )
+        else:
+            self.last_layer.weight_v = nn.Parameter(weight_v)
+
+        # Update label mapping
+        start_idx = len(self.name2label)
+        for i, label in enumerate(new_labels):
+            self.name2label[label] = start_idx + i
+            self.label2name[start_idx + i] = label
+
+        # Update weight_g to match new weight_v size
+        self.last_layer.weight_g = nn.Parameter(torch.ones(self.last_layer.weight_v.size(0), device=weight_v.device))
 
 
 class ContrastiveLearningViewGenerator(object):

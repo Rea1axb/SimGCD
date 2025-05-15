@@ -7,7 +7,7 @@ from termcolor import colored
 from collections import Counter
 
 # from utils.fileios import dump_json, load_json, dump_txt
-from util.prompt_utils import seed_everything, setup_config, get_distinguish_prompt, get_attr_prompt, get_guess_prompt, dump_json, load_json
+from util.prompt_utils import seed_everything, setup_config, get_distinguish_prompt, get_attr_prompt, get_guess_prompt, get_distinguish_two_class_prompt, dump_json, load_json
 
 # from data import DATA_STATS, PROMPTERS, DATA_DISCOVERY
 # from data.prompt_identify import prompts_howto
@@ -18,55 +18,52 @@ import re
 # Debugging knob
 DEBUG = False
 
+#TODO: valid json
 
-
-
-def extract_superidentify(cfg, individual_results):
-    words = []
-    for v in individual_results.values():
-        this_word = v.split(' ')[-1]
-        words.append(this_word.lower())
-    word_counts = Counter(words)
-
-    if cfg['dataset_name'] == 'pet':
-        return [super_name for super_name, _ in word_counts.most_common(2)]
-    else:
-        return [super_name for super_name, _ in word_counts.most_common(1)]
-
-
-def extract_python_list(text):
-    pattern = r"\[(.*?)\]"
-    matches = re.findall(pattern, text)
-    return matches
-
-
-def trim_result2json(raw_reply: str):
+def is_json(reply):
     """
-    the raw_answer is a dirty output from LLM following our template.
-    this function helps to extract the target JSON content contained in the
-    output.
+    检查接口返回内容是否为有效的 JSON 格式。
+    Args:
+        reply (str): 接口返回的字符串。
+    Returns:
+        bool: 如果是 JSON 格式，返回 True,否则返回 False。
     """
-    if raw_reply.find("Output JSON:") >= 0:
-        answer = raw_reply.split("Output JSON:")[1].strip()
-    else:
-        answer = raw_reply.strip()
+    reply = reply.strip()
+    if not reply.startswith("{") or not reply.endswith("}"):
+        return False
+    try:
+        # 尝试解析为 JSON
+        data = json.loads(reply)
+        return True
+    except json.JSONDecodeError:
+        return False
 
-    if answer.startswith('{'):
-        answer = answer.removeprefix('{')
-    if answer.endswith('}'): 
-        answer = answer.removesuffix('}')
+def is_guess_json(reply):
+    reply = reply.strip()
+    if not reply.startswith("{") or not reply.endswith("}"):
+        return False
+    try:
+        required_keys = {"three possible names", "information summary"}
+        
+        # 尝试解析为 JSON
+        data = json.loads(reply)
 
-    if "json" in answer:
-        answer = answer.strip().removeprefix("'''json").removesuffix("'''").strip()
-        answer = answer.strip().removeprefix("```json").removesuffix("```").strip()
+        # 检查是否是字典类型
+        if not isinstance(data, dict):
+            return False
+        
+        # 检查是否包含所有必需的键
+        if not required_keys.issubset(data.keys()):
+            return False
+        
+        # 检查每个键的值是否是列表
+        for key in required_keys:
+            if not isinstance(data[key], list):
+                return False
 
-    if not answer.startswith('{'): answer = '{' + answer
-
-    if not answer.endswith('}'): answer = answer + '}'
-
-    # json_answer = json.loads(answer)
-    return answer
-
+        return True
+    except json.JSONDecodeError:
+        return False
 
 def clean_name(name: str):
     name = name.title()
@@ -84,30 +81,66 @@ def extract_names(gussed_names, clean=True):
 
 
 def how_to_distinguish(bot, prompt_dict, prompt_dir):
+    """
+    Distinguishes super classes using a bot and prompts.
+
+    Args:
+        bot (Bot): The bot used for inference.
+        prompt_dict (dict): A dictionary containing the prompts for each super class.
+        prompt_dir (str): The directory path where the prompt files are stored.
+
+    Returns:
+        tuple: A tuple containing two dictionaries:
+            - super_class_distinguish_attr: A dictionary mapping each super class to its distinguishing attributes.
+            - super_class_valid: A dictionary indicating whether each super class was successfully distinguished.
+    """
     pattern = r'\[([^\]]*)\]'
     super_class_distinguish_attr_path = os.path.join(prompt_dir, 'super_class_distinguish_attr.json')
     super_class_distinguish_attr = load_json(super_class_distinguish_attr_path)
-    # super_class_res = dict()
+    super_class_valid = dict()
+    
     for super_class, prompt in prompt_dict.items():
         if super_class in super_class_distinguish_attr:
+            super_class_valid[super_class] = True
             continue
-        reply = bot.infer(prompt, temperature=0.1)
+        reply = bot.infer(prompt, temperature=0.1, return_json=True)
         used_tokens = bot.get_used_tokens()
-        matches = re.findall(pattern, reply)
-        result = matches[0].strip().replace('\n', '').replace('"', "'").replace("', '", "','")
-        super_class_distinguish_attr[super_class] = result.split(',')
+
+        # Check if the reply is a valid JSON
+        if not is_json(reply):
+            super_class_valid[super_class] = False
+            continue
+        
+        jsoned_reply = json.loads(reply)
+        super_class_distinguish_attr[super_class] = list(jsoned_reply.values())[0]
+        super_class_valid[super_class] = True
+    
     dump_json(super_class_distinguish_attr_path, super_class_distinguish_attr)
-    return super_class_distinguish_attr
+    return super_class_distinguish_attr, super_class_valid
 
 
 def main_identify(bot, data_disco, prompt_dir):
+    """
+    Identify the main object category in each image and store the results.
+
+    Args:
+        bot: VQA model.
+        data_disco: A list of tuples containing image data.
+        prompt_dir: The directory path where prompt files are stored.
+
+    Returns:
+        img_super_classes: A dictionary containing the image super classes.
+        super_classes_set: A set containing the super classes.
+    """
     img_super_classes_path = os.path.join(prompt_dir, 'img_super_classes_result.json')
     img_super_classes = load_json(img_super_classes_path)
     # img_super_classes = {}             # img: [attr1, attr2, ..., attrN]
     super_classes_set = set()
 
     for img, label, uq_idxs, mask_lab in tqdm(data_disco, desc='identify'):
+        uq_idxs = uq_idxs.item()
         if str(uq_idxs) in img_super_classes:
+            super_classes_set.add(img_super_classes[str(uq_idxs)])
             continue
         # prompt_identify = "Question: What is the main object in this image (choose from: Car, Flower, or Pokemon)? Answer:"
         prompt_identify = "Question: What is the category of the main object in this image? Answer:"
@@ -131,189 +164,319 @@ def describe_attr(bot, img, attr_list, super_class):
         pair_attr_reply.append([attr, trimmed_re_attr])
     return pair_attr_reply
 
-def main_describe(bot, data_disco, img_superclass_result, superclass_attr_dict, prompt_dir):
+def main_describe(bot, data_disco, img_superclass, superclass_attr_dict, prompt_dir, super_class_valid):
+    """
+    Describe the attributes of images in the given dataset.
+
+    Args:
+        bot (Bot): The bot object.
+        data_disco (list) : The list of image data.
+        img_superclass (dict): The dictionary mapping image indices to superclass labels.
+        superclass_attr_dict (dict): The dictionary mapping superclass labels to attribute lists.
+        prompt_dir (str): The directory path for prompt files.
+        super_class_valid (list): List of boolean values indicating the validity of each superclass.
+
+    Returns:
+        img_describe: A dictionary containing the descriptions of the images.
+
+    """
     img_describe_path = os.path.join(prompt_dir, 'img_describe.json')
     img_describe = load_json(img_describe_path)
     # img_describe_result = dict()
-    for img, label, uq_idxs, mask_lab in tqdm(data_disco, desc='describe'):
+    is_valid = [True] * len(data_disco)
+    for i, (img, label, uq_idxs, mask_lab) in enumerate(tqdm(data_disco, desc='describe')):
+        uq_idxs = uq_idxs.item()
         if str(uq_idxs) in img_describe:
             continue
-        super_class = img_superclass_result[str(uq_idxs)]
-        des_res = describe_attr(bot, img, superclass_attr_dict[super_class], super_class)
+        super_cls = img_superclass[str(uq_idxs)]
+        if super_cls not in super_class_valid or not super_class_valid[super_cls]:
+            is_valid[i] = False
+            continue
+
+        des_res = describe_attr(bot, img, superclass_attr_dict[super_cls], super_cls)
         img_describe[str(uq_idxs)] = des_res
 
         # DEBUG mode
         if DEBUG:
             break
     dump_json(img_describe_path, img_describe)
-    return img_describe
+    return img_describe, is_valid
 
 
-def main_guess(bot, img_superclass_result, img_describe, prompt_dir):
-    guess_raw_path = os.path.join(prompt_dir, 'guess_raw.json')
+def main_guess(bot, data_disco, img_superclass, img_describe, prompt_dir, super_class_valid, is_valid):
+    """
+    Perform guessing for a given set of images.
+
+    Args:
+        bot (Bot): The bot used for inference.
+        data_disco (list): List of image data.
+        img_superclass (dict): Dictionary mapping image indices to superclass labels.
+        img_describe (dict): Dictionary mapping image indices to descriptions.
+        prompt_dir (str): Directory path for prompt files.
+        super_class_valid (list): List of boolean values indicating the validity of each superclass.
+        is_valid (list): List of boolean values indicating the validity of each image.
+    Returns:
+        tuple: A tuple containing the following:
+            - guess_json (dict): Dictionary mapping image indices to generated guesses.
+            - img_describe_result (dict): Dictionary mapping image indices to descriptions.
+            - img_guess_json_result (dict): Dictionary mapping image indices to generated guesses.
+            - is_valid (list): List of boolean values indicating the validity of each image.
+    """
     guess_json_path = os.path.join(prompt_dir, 'guess_json.json')
-    guess_raw = load_json(guess_raw_path)
     guess_json = load_json(guess_json_path)
-    # replies_raw = dict()
-    # replies_json_to_save = dict()
 
-    for uq_idxs, describe in tqdm(img_describe.items(), desc='guess'):
-        if str(uq_idxs) in guess_raw or str(uq_idxs) in guess_json:
-            continue
-
-        guess_prompt = get_guess_prompt(img_superclass_result[uq_idxs], describe)
-        raw_reply = bot.infer(guess_prompt, temperature=0.9)
-        used_tokens = bot.get_used_tokens()
-        jsoned_reply = trim_result2json(raw_reply=raw_reply)
-
-        guess_raw[str(uq_idxs)] = raw_reply
-        guess_json[str(uq_idxs)] = jsoned_reply
-    dump_json(guess_raw_path, guess_raw)
-    dump_json(guess_json_path, guess_json)
-    return guess_raw, guess_json
-
-
-def main_result(data_disco, img_describe, img_guess_json):
     img_describe_result = dict()
     img_guess_json_result = dict()
-    for img, label, uq_idxs, mask_lab in tqdm(data_disco, desc='main_result'):
-        img_describe_result[str(uq_idxs)] = img_describe[str(uq_idxs)]
-        img_guess_json_result[str(uq_idxs)] = img_guess_json[str(uq_idxs)]
-    return img_describe_result, img_guess_json_result
+
+    assert len(is_valid) == len(data_disco), "Length of is_valid and data_disco do not match."
+
+    for i, (img, label, uq_idxs, mask_lab) in enumerate(tqdm(data_disco, desc='guess')):
+        uq_idxs = uq_idxs.item()
+        if not is_valid[i]:
+            continue
+        describe = img_describe[str(uq_idxs)]
+        if str(uq_idxs) in guess_json:
+            img_describe_result[str(uq_idxs)] = describe
+            img_guess_json_result[str(uq_idxs)] = guess_json[str(uq_idxs)]
+            continue
+        
+        # super_class，非法
+        super_cls = img_superclass[str(uq_idxs)]
+        if super_cls not in super_class_valid or not super_class_valid[super_cls]:
+            is_valid[i] = False
+            continue
+
+        guess_prompt = get_guess_prompt(super_cls, describe)
+        jsoned_reply = bot.infer(guess_prompt, temperature=0.9, return_json=True)
+
+        # 返回的不是json，非法
+        if not is_guess_json(jsoned_reply):
+            is_valid[i] = False
+            continue
+        
+        guess_json[str(uq_idxs)] = jsoned_reply
+        img_describe_result[str(uq_idxs)] = describe
+        img_guess_json_result[str(uq_idxs)] = jsoned_reply
+
+    dump_json(guess_json_path, guess_json)
+    return guess_json, img_describe_result, img_guess_json_result, is_valid
+
+def main_distinguish_two_class(bot, data_disco, two_class_dict, img_superclass, img_describe):
+    """
+    Perform the main process of distinguishing two classes for each image in the given dataset.
+
+    Args:
+        bot (Bot): The bot object used for inference.
+        data_disco (list): The list of data containing images, labels, unique indices, and masks.
+        two_class_dict (dict): A dictionary mapping unique indices to two classes.
+        img_superclass (dict): A dictionary mapping unique indices to super classes.
+        img_describe (dict): A dictionary mapping unique indices to image descriptions.
+
+    Returns:
+        dict: A dictionary mapping unique indices to the inference results.
+
+    """
+    distinguish_two_class_result = dict()
+    for img, label, uq_idxs, mask_lab in tqdm(data_disco, desc='distiguish_two_class'):
+        uq_idxs = uq_idxs.item()
+        class1, class2 = two_class_dict[str(uq_idxs)]
+        describe = img_describe[str(uq_idxs)]
+        super_class = img_superclass[str(uq_idxs)]
+        distinguish_two_class_prompt = get_distinguish_two_class_prompt(super_class, class1, class2, describe)
+        jsoned_reply = bot.infer(distinguish_two_class_prompt, temperature=0.1, return_json=True)
+        distinguish_two_class_result[str(uq_idxs)] = jsoned_reply
+    return distinguish_two_class_result
 
 
-def post_process(jsoned_replies):
-    reply_list = []
-    num_of_failures = 0
-    # duplicated dict
-    for k, v in jsoned_replies.items():
-        # print(k)
-        # print(v)
-        # print()
-        # print()
-        rex = r"""(?<=[}\]"'])\s*,\s*(?!\s*[{["'])""" # 去除多余逗号
-        v_json = json.loads(re.sub(rex, "", v, 0))
-        reply_list.append(v_json)
 
-        # v_json = json.loads(v)ypp
-        # reply_list.append(v_json)
+def get_query_result(img_data, model_size_vqa='FlanT5-XL', model_type_llm='moonshot-v1-8k', device='cuda', device_id=0, prompt_dir=None, mode='get_pseudo_labels', two_class_dict=None):
+    """
+    Retrieves the query result based on the provided image data and parameters.
 
-    guessed_names = []
-    for item in reply_list:
-        item_keys = list(item.keys())
-        for name_list in item_keys:
-            guessed_names.extend(name_list.split(','))
+    Args:
+        img_data (list): List of image data.
+        model_size_vqa (str, optional): Size of the VQA model. Defaults to 'FlanT5-XL'.
+        model_type_llm (str, optional): Type of the LLM model. Defaults to 'moonshot-v1-8k'.
+        device (str, optional): Device to use for computation. Defaults to 'cuda'.
+        device_id (int, optional): ID of the device to use. Defaults to 0.
+        prompt_dir (str, optional): Directory to store prompts. Must be specified. Defaults to None.
+        mode (str, optional): Mode of operation. Defaults to 'get_pseudo_labels'.
+        two_class_dict (dict, optional): Dictionary containing two classes. Must be specified if mode is 'get_distinguish_two_class'. Defaults to None.
 
-    guessed_names = extract_names(guessed_names, clean=False)
+    Returns:
+        tuple: A tuple containing the following elements:
+            - img_describe_result (list): List of image descriptions.
+            - img_guess_json_result (list): List of image guess JSON results.
+            - is_valid (bool): Flag indicating if the result is valid.
 
+    Raises:
+        AssertionError: If prompt_dir is not specified when mode is 'get_pseudo_labels'.
+        AssertionError: If two_class_dict is not specified when mode is 'get_distinguish_two_class'.
+    """
 
-    # print(30 * '=')
-    # print(f"\t\t Finished Post-processing")
-    # print(30 * '=')
+    assert prompt_dir is not None, "prompt_dir is not specified"
 
-    # print(f"\t\t ---> total discovered names = {len(guessed_names)}")
-    # print(guessed_names)
-    # print()
-    # print(f"\t\t ---> total discovered names = {len(guessed_names)}")
-    # print(f"\t\t ---> number of failure entries = {num_of_failures}")
-
-    # print('END' + 30 * '=')
-    # print()
-    return guessed_names
-
-
-def get_query_result(img_data, model_size_vqa='FlanT5-XL', model_type_llm='moonshot-v1-8k', device='cuda', device_id=0, prompt_dir=None):
     if not os.path.exists(prompt_dir):
         os.makedirs(prompt_dir)
 
     # step 1
     vqa_bot = VQABot(model_tag=model_size_vqa, device=device, device_id=device_id, bit8=False)
-    img_superclass_result, superclass_set = main_identify(vqa_bot, img_data, prompt_dir)
+    # img_superclass: all data
+    # superclass_set: selected data
+    img_superclass, superclass_set = main_identify(vqa_bot, img_data, prompt_dir)
 
     # step 2
     llm_bot = LLMBot(model=model_type_llm, temperature=0.1)
     distinguish_prompt_dict = get_distinguish_prompt(superclass_set)
-    superclass_distinguish_attr = how_to_distinguish(llm_bot, distinguish_prompt_dict, prompt_dir)
+    superclass_distinguish_attr, superclass_valid = how_to_distinguish(llm_bot, distinguish_prompt_dict, prompt_dir)
 
     # step 3
-    img_describe = main_describe(vqa_bot, img_data, img_superclass_result, superclass_distinguish_attr, prompt_dir)
+    # img_describe: all data
+    img_describe, is_valid = main_describe(vqa_bot, img_data, img_superclass, superclass_distinguish_attr, prompt_dir, superclass_valid) 
 
     # step 4
-    guess_raw, guess_json = main_guess(llm_bot, img_superclass_result, img_describe, prompt_dir)
+    if mode == 'get_pseudo_labels':
+        # guess_json: all data
+        # img_describe_result: selected data
+        # img_guess_json_result: selected data
+        guess_json, img_describe_result, img_guess_json_result, is_valid = main_guess(llm_bot, img_data, img_superclass, img_describe, prompt_dir, superclass_valid, is_valid)
 
-    # get img_data result
-    img_describe_result, img_guess_json_result = main_result(img_data, img_describe, guess_json)
+        # get class name
+        guess_result_path = os.path.join(prompt_dir, 'guess_result.json')
 
-    # get class name
-    guess_result_path = os.path.join(prompt_dir, 'guess_result.json')
+        dump_json(guess_result_path, img_guess_json_result)        
+        jsoned_replies = load_json(guess_result_path)
 
-    dump_json(guess_result_path, img_guess_json_result)        
-    jsoned_replies = load_json(guess_result_path)
 
-    guessed_names = post_process(jsoned_replies)
-    # TODO only use img_guess_json_result
-    return img_describe_result, img_guess_json_result, guessed_names
+        return img_describe_result, img_guess_json_result, is_valid
+    elif mode == 'get_distinguish_two_class':
+        assert two_class_dict is not None, "two_class_dict is not specified"
+        distinguish_two_class_result = main_distinguish_two_class(llm_bot, img_data, two_class_dict, img_superclass, img_describe)
+        return distinguish_two_class_result
 
-def get_pseudo_labels(img_data, clip_model, clip_processor, label2name, img_guess_json_result, device='cuda', device_id=0):
+def get_pseudo_labels(img_data, clip_model, clip_processor, label2name, model_size_vqa='FlanT5-XL', model_type_llm='moonshot-v1-8k', device='cuda', device_id=0, prompt_dir=None):
+    """
+    Generates pseudo labels and description text for a given set of image data.
+
+    Args:
+        img_data (torch.utils.data.Dataset): The image data.
+        clip_model (torch.nn.Module): The CLIP model.
+        clip_processor (transformers.CLIPProcessor): The CLIP processor.
+        label2name (dict): A dictionary mapping label indices to label names.
+        model_size_vqa (str, optional): The size of the VQA model. Defaults to 'FlanT5-XL'.
+        model_type_llm (str, optional): The type of the LLM model. Defaults to 'moonshot-v1-8k'.
+        device (str, optional): The device to run the model on. Defaults to 'cuda'.
+        device_id (int, optional): The ID of the device. Defaults to 0.
+        prompt_dir (str, optional): The directory containing prompt files. Defaults to None.
+
+    Returns:
+        Tuple[Dict[str, str], Dict[str, str], List[bool]]: A tuple containing the pseudo labels, description text, and validity flags.
+            - img_pseudo_label (Dict[str, str]): A dictionary mapping unique indices to pseudo labels.
+            - img_describe_text (Dict[str, str]): A dictionary mapping unique indices to description text.
+            - is_valid (List[bool]): A list indicating the validity of each image.
+
+    """
+    img_describe_result, img_guess_json_result, is_valid = get_query_result(
+        img_data=img_data, 
+        model_size_vqa=model_size_vqa,
+        model_type_llm=model_type_llm,
+        device=device, 
+        device_id=device_id, 
+        prompt_dir=prompt_dir, 
+        mode='get_pseudo_labels'
+    )
+
     img_pseudo_label = dict()
     img_describe_text = dict()
     with torch.no_grad():
-        for img, label, uq_idxs, mask_lab in tqdm(img_data, desc='pseudo_labels'):
-            describe_text = list(img_guess_json_result[str(uq_idxs)].values())[0]
+        for i, (img, label, uq_idxs, mask_lab) in enumerate(tqdm(img_data, desc='pseudo_labels')):
+            if not is_valid[i]:
+                continue
+            uq_idxs = uq_idxs.item()
+            img_guess_json = json.loads(img_guess_json_result[str(uq_idxs)])
+            describe_text = img_guess_json['information summary']
             img_describe_text[str(uq_idxs)] = describe_text
             if mask_lab:
-                img_pseudo_label[str(uq_idxs)] = label2name[label]
+                img_pseudo_label[str(uq_idxs)] = label2name[label.item()]
                 continue
-            label_list = list(img_guess_json_result[str(uq_idxs)].keys())[0].split(',')
-            inputs = clip_processor(text=label_list, images=img, return_tensors="pt", padding=True)
+            label_list = img_guess_json['three possible names']
+            inputs = clip_processor(text=label_list, images=img, return_tensors="pt", padding=True, truncation=True, do_rescale=False).to(f'{device}:{device_id}')
             outputs = clip_model(**inputs)
             logits_per_image = outputs.logits_per_image
-            _, num = logits_per_image.max()
+            num = logits_per_image.argmax()
             img_pseudo_label[str(uq_idxs)] = label_list[num]
-    return img_pseudo_label, img_describe_text
+    return img_pseudo_label, img_describe_text, is_valid
 
+def get_two_class_distinguish(img_data, two_class_dict, model_size_vqa='FlanT5-XL', model_type_llm='moonshot-v1-8k', device='cuda', device_id=0, prompt_dir=None):
+    """
+    Get the distinguish result for two classes based on the given image data.
 
-def get_prototypes(img_data, clip_model, clip_processor, img_pseudo_label, img_describe_text, device_id=0):
-    pseudo_label_features = dict()
-    prototypes = dict()
-    with torch.no_grad():
-        for img, label, uq_idxs, mask_lab in tqdm(img_data, desc='prototypes'):
-            pseudo_label = img_pseudo_label[str(uq_idxs)]
-            describe_text = img_describe_text[str(uq_idxs)]
-            device = f"cuda:{device_id}"
-            # 对图片进行编码
-            image_features = clip_model.get_image_features(
-                clip_processor(images=img, return_tensors="pt").to(device)["pixel_values"]
-            ).detach().cpu()
+    Args:
+        img_data (numpy.ndarray): The image data.
+        two_class_dict (dict): A dictionary containing the two classes to distinguish.
+        model_size_vqa (str, optional): The size of the VQA model. Defaults to 'FlanT5-XL'.
+        model_type_llm (str, optional): The type of the LLM model. Defaults to 'moonshot-v1-8k'.
+        device (str, optional): The device to run the models on. Defaults to 'cuda'.
+        device_id (int, optional): The ID of the device. Defaults to 0.
+        prompt_dir (str, optional): The directory containing the prompt files. Defaults to None.
 
-            # 对文本描述进行编码
-            text_features = clip_model.get_text_features(
-                clip_processor(text=describe_text, return_tensors="pt").to(device)["input_ids"]
-            ).detach().cpu()
+    Returns:
+        dict: A dictionary containing the distinguish result for the two classes.
+    """
 
-            # 累加特征
-            if pseudo_label not in pseudo_label_features:
-                pseudo_label_features[pseudo_label] = {"image": [], "text": []}
+    distinguish_two_class_result = get_query_result(
+        img_data=img_data, 
+        model_size_vqa=model_size_vqa,
+        model_type_llm=model_type_llm,
+        device=device, 
+        device_id=device_id, 
+        prompt_dir=prompt_dir, 
+        mode='get_distinguish_two_class', 
+        two_class_dict=two_class_dict
+    )
 
-            pseudo_label_features[pseudo_label]["image"].append(image_features)
-            pseudo_label_features[pseudo_label]["text"].append(text_features)
-        
-        for pseudo_label, features in pseudo_label_features.items():
-            image_prototype = torch.mean(torch.stack(features["image"]), dim=0)
-            text_prototype = torch.mean(torch.stack(features["text"]), dim=0)
-            prototypes[pseudo_label] = (image_prototype, text_prototype)
-        
-    return prototypes
+    return distinguish_two_class_result
+    
 
 if __name__ == "__main__":
     from PIL import Image
+    from transformers import CLIPProcessor, CLIPModel
+    from config import exp_root, dino_pretrain_path, clip_pretrain_path
     img_path_1 = "/home/czq/2024_12_11_clip/labelled/red_fox/n02119022_28.JPEG"
     img_path_2 = "/home/czq/2024_12_11_clip/labelled/ferret/n02443484_14.JPEG"
     img_path_3 = "/home/czq/2024_12_11_clip/labelled/ferret/n02443484_70.JPEG"
+    img_path_4 = "/home/czq/2024_12_11_clip/test/bobtail/ILSVRC2012_val_00002247.JPEG"
+    img_path_5 = "/home/czq/2024_12_11_clip/test/bobtail/ILSVRC2012_val_00003413.JPEG"
     img_1 = Image.open(img_path_1)
     img_2 = Image.open(img_path_2)
-    img_list = [(img_1, 1, 0, True), (img_2, 2, 1, True)]
-    get_query_result(img_data=img_list, prompt_dir='./outputs/LLM4GCD/prompt/test')
+    img_3 = Image.open(img_path_3)
+    img_4 = Image.open(img_path_4)
+    img_5 = Image.open(img_path_5)
+
+    img_pseudolabel_list = [(img_1, 1, 0, True), (img_2, 2, 1, True), (img_3, 2, 2, True), (img_4, 3, 3, False)]
+    img_distinguish_list = [(img_5, 3, 4, False)]
+    two_class_dict = {"4": ["ferret", "red_fox"], "5": ["bobtail", "ferret"]}
+    label2name = {0: "red_fox", 1: "ferret", 2: "ferret", 3: "bobtail"}
+
+    clip_model = CLIPModel.from_pretrained(clip_pretrain_path)
+    clip_processor = CLIPProcessor.from_pretrained(clip_pretrain_path)
+
+    img_pseudo_label_res, img_describe_text_res = get_pseudo_labels(
+        img_data=img_pseudolabel_list, 
+        clip_model=clip_model, 
+        clip_processor=clip_processor, 
+        label2name=label2name, 
+        model_type_llm='qwen-turbo',
+        prompt_dir='./outputs/LLM4GCD/prompt/test'
+    )
+    img_distinguish_res = get_two_class_distinguish(
+        img_data=img_distinguish_list, 
+        two_class_dict=two_class_dict, 
+        model_type_llm='qwen-turbo',
+        prompt_dir='./outputs/LLM4GCD/prompt/test'
+    )
+
+    # get_query_result(img_data=img_list, prompt_dir='./outputs/LLM4GCD/prompt/test')
 
     # parser = argparse.ArgumentParser(description='Discovery', formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 

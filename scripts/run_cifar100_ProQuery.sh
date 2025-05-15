@@ -3,7 +3,7 @@
 set -e
 set -x
 
-CUDA_VISIBLE_DEVICES=3 python train_LLM4GCD.py \
+TOKENIZERS_PARALLELISM=false CUDA_VISIBLE_DEVICES=3 python train_LLM4GCD.py \
     --dataset_name 'cifar100' \
     --setting 'default' \
     --batch_size 128 \
@@ -20,5 +20,12 @@ CUDA_VISIBLE_DEVICES=3 python train_LLM4GCD.py \
     --warmup_teacher_temp_epochs 30 \
     --memax_weight 4 \
     --eval_freq 10 \
-    --sup_coarse_con_weight 0.1 \
-    --exp_name cifar100_clip_default
+    --clip_train_epochs 1 \
+    --query_freq 20 \
+    --n_samples_1 30 \
+    --n_samples_2 30 \
+    --n_samples_3 30 \
+    --n_samples_label 5 \
+    --clip_train_epochs 2 \
+    --prompt_dir './outputs/LLM4GCD/prompt/cifar100_default'\
+    --exp_name cifar100_ProQuery_default

@@ -74,9 +74,9 @@ class VQABot:
 
     def __call_blip2(self, raw_image, prompt):
         if self.device == 'cpu':
-            inputs = self.blip2_processor(raw_image, prompt, return_tensors="pt")
+            inputs = self.blip2_processor(raw_image, prompt, return_tensors="pt", do_rescale=False)
         else:
-            inputs = self.blip2_processor(raw_image, prompt, return_tensors="pt").to(self.device, torch.float16)
+            inputs = self.blip2_processor(raw_image, prompt, return_tensors="pt", do_rescale=False).to(self.device, torch.float16)
 
         out = self.blip2.generate(**inputs,  max_new_tokens=self.max_answer_tokens) \
             if self.max_answer_tokens > 0 else self.blip2.generate(**inputs)
@@ -115,7 +115,7 @@ class VQABot:
         return reply
 
     def call_llm(self, prompts):
-        prompts_temp = self.blip2_processor(None, prompts, return_tensors="pt")
+        prompts_temp = self.blip2_processor(None, prompts, return_tensors="pt", do_rescale=False)
         input_ids = prompts_temp['input_ids'].to(self.device)
         attention_mask = prompts_temp['attention_mask'].to(self.device, torch.float16)
 
